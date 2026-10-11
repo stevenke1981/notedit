@@ -1,8 +1,9 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 slint::include_modules!();
 mod preview;
+mod highlight;
 
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::{ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -27,12 +28,13 @@ struct Doc {
     undo: Vec<String>,
     redo: Vec<String>,
     last_snap: Option<Instant>,
+    hl: highlight::Hl,
 }
 
 impl Doc {
     fn new(n: usize) -> Self {
         Doc { path: None, title: format!("new {}", n), text: String::new(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
-              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None }
+              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None, hl: Default::default() }
     }
     fn encoding_label(&self) -> String {
         let n = self.encoding.name();
@@ -166,7 +168,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
     ]
 }
 
-struct App { ui: slint::Weak<AppWindow>, st: RefCell<State> }
+struct App { ui: slint::Weak<AppWindow>, st: RefCell<State>, ver: std::cell::Cell<u64>, last: std::cell::Cell<(u64, usize, usize, bool)> }
 
 impl App {
     fn ui(&self) -> AppWindow { self.ui.upgrade().unwrap() }
@@ -186,6 +188,7 @@ impl App {
     }
 
     fn refresh_meta(&self) {
+        self.ver.set(self.ver.get() + 1);
         let ui = self.ui();
         let st = self.st.borrow();
         let d = &st.docs[st.cur];
@@ -494,6 +497,29 @@ impl App {
         }
     }
 
+    /// called periodically: keep syntax highlight overlay in sync with visible range
+    fn tick_highlight(&self) {
+        let ui = self.ui();
+        let lh = ui.get_line_h().max(1.0);
+        let first = ((ui.get_scroll_y() - 2.0).max(0.0) / lh) as usize;
+        let count = (ui.get_view_h() / lh) as usize + 2;
+        let ver = self.ver.get();
+        let (lv, lf, lc, done) = self.last.get();
+        if lv == ver && lf == first && lc == count && done { return; }
+        let t0 = Instant::now();
+        let mut st = self.st.borrow_mut();
+        let cur = st.cur;
+        let d = &mut st.docs[cur];
+        let ext = d.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase());
+        let Doc { hl, text, lang, .. } = d;
+        if lv != ver { hl.sync(text, lang, ext.as_deref()); }
+        let mut finished = hl.work(first + count, 300);
+        while !finished && t0.elapsed().as_millis() < 25 { finished = hl.work(first + count, 300); }
+        ui.set_hl_active(hl.active());
+        if hl.active() { ui.set_hl_lines(ModelRc::new(VecModel::from(hl.visible(first, count)))); }
+        self.last.set((ver, first, count, finished));
+    }
+
     fn confirm_exit(&self) -> bool {
         loop {
             let idx = self.st.borrow().docs.iter().position(|d| d.modified);
@@ -526,7 +552,7 @@ fn msg(s: &str) {
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
     let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: 14.0, wrap: false, line_numbers: true, preview: false, overwrite: false, macro_rec: false };
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st) });
+    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), ver: Default::default(), last: std::cell::Cell::new((u64::MAX, 0, 0, false)) });
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
     cb!(on_menu_action, |a, s: SharedString| { a.action(&s) });
@@ -581,8 +607,10 @@ fn main() -> Result<(), slint::PlatformError> {
     for arg in std::env::args().skip(1) { app.open_path(PathBuf::from(arg)); }
     app.refresh_all();
 
+    let a3 = app.clone();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(30), move || a3.tick_highlight());
     let a2 = app.clone();
     ui.window().on_close_requested(move || if a2.confirm_exit() { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown });
-    let _ = Model::row_count(&VecModel::<i32>::default());
     ui.run()
 }

@@ -9,6 +9,7 @@ encoding_rs = "0.8.35"
 pulldown-cmark = { version = "0.12", default-features = false }
 rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 slint = "=1.9.2"
+syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
 
 [build-dependencies]
 slint-build = "=1.9.2"

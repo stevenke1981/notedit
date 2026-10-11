@@ -1,4 +1,8 @@
 import { Button, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+import "fonts/DejaVuSansMono.ttf";
+import "fonts/DejaVuSansMono-Bold.ttf";
+export struct HlToken { text: string, color: color, bold: bool, italic: bool }
+export struct HlLine { line: int, tokens: [HlToken] }
 
 export struct MenuItem { label: string, shortcut: string, action: string, separator: bool, checked: bool }
 export struct Menu { title: string, items: [MenuItem] }
@@ -64,6 +68,14 @@ export component AppWindow inherits Window {
     in-out property <string> replace-text;
     in-out property <bool> match-case: false;
     in property <int> total-lines: 1;
+    in property <[HlLine]> hl-lines;
+    in property <bool> hl-active: false;
+    out property <length> scroll-y: -flick.viewport-y;
+    out property <length> view-h: flick.height;
+    out property <length> line-h: metric.preferred-height;
+    property <string> mono: "DejaVu Sans Mono";
+    property <bool> overlay: hl-active && !word-wrap;
+    property <length> caret-x; property <length> caret-y;
     out property <int> cursor-byte: ti.cursor-position_byte-offset;
     out property <int> anchor-byte: ti.anchor-position-byte-offset;
 
@@ -188,18 +200,26 @@ export component AppWindow inherits Window {
                         x: 0; y: 0; width: show-line-numbers ? ln.preferred-width + 16px : 4px;
                         height: parent.viewport-height; background: #e4e4e4;
                         ln := Text { visible: show-line-numbers; x: 6px; y: 2px; text: line-numbers;
-                            font-family: "monospace"; font-size: editor-font-size; color: #808080; horizontal-alignment: right; }
+                            font-family: mono; font-size: editor-font-size; color: #808080; horizontal-alignment: right; }
+                    }
+                    metric := Text { visible: false; text: "Xg"; font-family: mono; font-size: editor-font-size; }
+                    for l in overlay ? hl-lines : []: HorizontalLayout {
+                        x: ti.x; y: ti.y + l.line * line-h; height: line-h; spacing: 0; alignment: start;
+                        for t in l.tokens: Text { text: t.text; color: t.color; font-family: mono; font-size: editor-font-size;
+                            font-weight: t.bold ? 700 : 400; font-italic: t.italic; vertical-alignment: top; }
                     }
                     ti := TextInput {
                         x: gutter.width + 4px; y: 2px;
                         width: word-wrap ? flick.width - gutter.width - 12px : max(self.preferred-width, flick.width - gutter.width - 12px);
                         single-line: false;
                         wrap: word-wrap ? TextWrap.word-wrap : TextWrap.no-wrap;
-                        font-family: "monospace"; font-size: editor-font-size;
+                        font-family: mono; font-size: editor-font-size;
                         text <=> editor-text;
-                        selection-background-color: #c0d8f0; selection-foreground-color: #000;
+                        selection-background-color: #c0d8f0; selection-foreground-color: overlay ? #000 : #000;
+                        color: overlay ? transparent : #000;
                         edited => { text-edited(self.text); cursor-moved(self.cursor-position_byte-offset); }
                         cursor-position-changed(p) => {
+                            caret-x = p.x; caret-y = p.y;
                             cursor-moved(self.cursor-position_byte-offset);
                             if (p.y + flick.viewport-y < 0) { flick.viewport-y = -p.y + 4px; }
                             if (p.y + flick.viewport-y > flick.height - editor-font-size * 2) { flick.viewport-y = -(p.y - flick.height + editor-font-size * 2); }
@@ -209,6 +229,7 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    if overlay && ti.has-focus: Rectangle { x: ti.x + caret-x; y: ti.y + caret-y; width: 2px; height: line-h; background: #000; }
                 }
             }
             if show-preview: Rectangle { width: 1px; background: #aaa; }
@@ -229,7 +250,7 @@ export component AppWindow inherits Window {
                                         font-size: b.kind == 1 ? 26px : b.kind == 2 ? 21px : b.kind == 3 ? 18px : b.kind >= 4 && b.kind <= 6 ? 15px : 14px;
                                         font-weight: (b.kind >= 1 && b.kind <= 6) || b.bold ? 700 : 400;
                                         font-italic: b.italic;
-                                        font-family: b.kind == 10 || b.code ? "monospace" : "";
+                                        font-family: b.kind == 10 || b.code ? mono : "";
                                         color: b.link ? #0645ad : b.kind == 12 ? #555 : #222;
                                     }
                                 }

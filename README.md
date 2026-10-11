@@ -15,6 +15,8 @@
 - **檢視**：行號、自動換行、縮放（Ctrl + + / − / 0）、HTML/Markdown 預覽窗格
 - **編碼**：自動偵測（BOM / UTF-8 / chardetng），支援 UTF-8、UTF-8-BOM、UTF-16 LE/BE、Big5、GBK、Shift-JIS、Windows-1252，儲存時依選擇的編碼轉換
 - **換行格式**：自動偵測 CRLF / LF / CR，可轉換
+- **語法上色**：使用 syntect（純 Rust regex-fancy，InspiredGitHub 配色），僅渲染可見行並快取每行解析狀態，編輯時從變更行起增量重算，數千行檔案仍流暢
+- **等寬字型**：內嵌 DejaVu Sans Mono（授權見 `ui/fonts/LICENSE-DejaVu.txt`）
 - **語言**：依副檔名辨識（Rust、C/C++、C#、Java、Python、JS、HTML、CSS、XML、JSON、Markdown、Shell、Batch、INI、SQL、YAML、Slint…），可手動切換
 - **狀態列**：檔案類型、length / lines、Ln / Col / Pos / Sel、換行格式、編碼、INS/OVR
 - **工具**：字數統計、插入日期時間
@@ -33,7 +35,8 @@ Windows / Linux / macOS 執行檔由 GitHub Actions 自動建置，可於 Action
 
 ## 已知限制（相較 Notepad++）
 
-- 編輯區尚無語法上色（Slint 的 TextInput 不支援多色文字；需自製文字渲染元件）
+- 語法上色僅在「不自動換行」模式下啟用（自動換行時改為單色顯示）；選取範圍內文字以黑色顯示
+- 語法定義使用 syntect 內建集合（無 TOML、Slint 專屬語法；Slint 以 Rust 規則近似）
 - 預覽為簡化版：區塊層級樣式（標題、清單、引用、程式碼、連結），行內粗體/斜體以整段套用；不支援 CSS、圖片、表格版面
 - 覆寫模式僅為狀態指示；巨集、外掛、程式碼摺疊、多重選取、分割視窗、正規表示式搜尋、自動完成、工作階段保存尚未實作
 - 開啟自動換行時隱藏行號
