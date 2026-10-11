@@ -2858,15 +2858,20 @@ dependencies = [
 
 [[package]]
 name = "notedit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chardetng",
  "encoding_rs",
+ "i-slint-backend-winit",
  "pulldown-cmark",
+ "regex",
  "rfd",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "syntect",
+ "winit",
  "winresource",
 ]
 

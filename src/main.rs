@@ -2,8 +2,12 @@
 slint::include_modules!();
 mod preview;
 mod highlight;
+mod search;
+mod settings;
 
-use slint::{ModelRc, SharedString, VecModel};
+use i_slint_backend_winit::{WinitWindowAccessor, WinitWindowEventResult};
+
+use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -29,12 +33,13 @@ struct Doc {
     redo: Vec<String>,
     last_snap: Option<Instant>,
     hl: highlight::Hl,
+    cursor: usize,
 }
 
 impl Doc {
     fn new(n: usize) -> Self {
         Doc { path: None, title: format!("new {}", n), text: String::new(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
-              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None, hl: Default::default() }
+              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None, hl: Default::default(), cursor: 0 }
     }
     fn encoding_label(&self) -> String {
         let n = self.encoding.name();
@@ -89,6 +94,12 @@ struct State {
     preview: bool,
     overwrite: bool,
     macro_rec: bool,
+    macro_play: bool,
+    macro_buf: Vec<String>,
+    dark: bool,
+    marks: Vec<usize>,
+    hits: Vec<(usize, usize, usize)>,
+    cfg: settings::Settings,
 }
 
 fn decode(bytes: &[u8]) -> (String, &'static encoding_rs::Encoding, bool) {
@@ -130,6 +141,14 @@ fn mi(label: &str, shortcut: &str, action: &str) -> MenuItem {
 fn sep() -> MenuItem { MenuItem { label: "".into(), shortcut: "".into(), action: "".into(), separator: true, checked: false } }
 fn chk(label: &str, shortcut: &str, action: &str, c: bool) -> MenuItem { let mut m = mi(label, shortcut, action); m.checked = c; m }
 
+fn recent_items(st: &State) -> Vec<MenuItem> {
+    if st.cfg.recent.is_empty() { return vec![mi("(無最近開啟的檔案)", "", "none")]; }
+    let mut v: Vec<MenuItem> = st.cfg.recent.iter().enumerate()
+        .map(|(i, p)| mi(&format!("{}: {}", i + 1, p.display()), "", &format!("recent:{}", i))).collect();
+    v.push(mi("清除最近開啟清單", "", "clearrecent"));
+    v
+}
+
 fn build_menus(st: &State) -> Vec<Menu> {
     let d = &st.docs[st.cur];
     let menu = |t: &str, items: Vec<MenuItem>| Menu { title: t.into(), items: ModelRc::new(VecModel::from(items)) };
@@ -142,25 +161,31 @@ fn build_menus(st: &State) -> Vec<Menu> {
     vec![
         menu("檔案", vec![mi("開新檔案", "Ctrl+N", "new"), mi("開啟舊檔...", "Ctrl+O", "open"), mi("重新載入", "", "reload"), sep(),
             mi("儲存檔案", "Ctrl+S", "save"), mi("另存新檔...", "Ctrl+Shift+S", "saveas"), mi("全部儲存", "", "saveall"), sep(),
-            mi("關閉", "Ctrl+W", "close"), mi("全部關閉", "", "closeall"), mi("關閉其他分頁", "", "closeothers"), sep(), mi("結束", "Alt+F4", "exit")]),
+            mi("關閉", "Ctrl+W", "close"), mi("全部關閉", "", "closeall"), mi("關閉其他分頁", "", "closeothers"), sep(),
+            mi("匯出為 HTML...", "", "exporthtml"), mi("列印 (以瀏覽器)...", "Ctrl+P", "print"), sep()]
+            .into_iter().chain(recent_items(st)).chain([sep(), mi("結束", "Alt+F4", "exit")]).collect()),
         menu("編輯", vec![mi("復原", "Ctrl+Z", "undo"), mi("取消復原", "Ctrl+Y", "redo"), sep(),
             mi("剪下", "Ctrl+X", "cut"), mi("複製", "Ctrl+C", "copy"), mi("貼上", "Ctrl+V", "paste"), mi("全選", "Ctrl+A", "selectall"), sep(),
             mi("複製目前行", "Ctrl+D", "dupline"), mi("刪除目前行", "", "delline"), mi("轉成大寫", "", "upper"), mi("轉成小寫", "", "lower"),
             mi("移除行尾空白", "", "trimtrail"), mi("排序行 (遞增)", "", "sortlines"), sep(),
             mi("換行格式 → Windows (CR LF)", "", "eol:crlf"), mi("換行格式 → Unix (LF)", "", "eol:lf"), mi("換行格式 → Macintosh (CR)", "", "eol:cr")]),
         menu("搜尋", vec![mi("尋找...", "Ctrl+F", "find"), mi("找下一個", "F3", "findnext"), mi("找上一個", "Shift+F3", "findprev"),
-            mi("取代...", "Ctrl+H", "replace"), sep(), mi("跳至...", "Ctrl+G", "goto")]),
+            mi("取代...", "Ctrl+H", "replace"), mi("在所有開啟文件中尋找", "", "findall"), sep(), mi("跳至...", "Ctrl+G", "goto"), mi("跳至對應括號", "Ctrl+B", "gotobrace")]),
         menu("檢視", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers),
             chk("HTML / Markdown 預覽", "", "preview", st.preview), sep(),
+            chk("深色主題", "", "dark", st.dark), sep(),
             mi("放大", "Ctrl++", "zoomin"), mi("縮小", "Ctrl+-", "zoomout"), mi("恢復預設縮放", "Ctrl+0", "zoomreset")]),
         menu("編碼", vec![chk("UTF-8", "", "enc:utf8", d.encoding == encoding_rs::UTF_8 && !d.bom), chk("UTF-8-BOM", "", "enc:utf8bom", d.encoding == encoding_rs::UTF_8 && d.bom),
             chk("UTF-16 LE BOM", "", "enc:utf16le", d.encoding == encoding_rs::UTF_16LE), chk("UTF-16 BE BOM", "", "enc:utf16be", d.encoding == encoding_rs::UTF_16BE), sep(),
             chk("Big5 (繁體中文)", "", "enc:big5", d.encoding == encoding_rs::BIG5), chk("GBK (簡體中文)", "", "enc:gbk", d.encoding == encoding_rs::GBK),
             chk("Shift-JIS (日文)", "", "enc:sjis", d.encoding == encoding_rs::SHIFT_JIS), chk("Windows-1252 (西歐)", "", "enc:1252", d.encoding == encoding_rs::WINDOWS_1252)]),
         menu("語言", lang_items),
-        menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("覆寫模式 (OVR 指示)", "Insert", "toggleovr", st.overwrite)]),
+        menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
+            chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
+            mi("開啟設定檔所在資料夾", "", "openconfig")]),
         menu("工具", vec![mi("統計 (字數/行數)", "", "stats"), mi("插入日期時間", "", "datetime")]),
-        menu("巨集", vec![chk("開始/停止錄製 (未實作)", "", "macro", st.macro_rec)]),
+        menu("巨集", vec![chk(if st.macro_rec { "停止錄製" } else { "開始錄製" }, "Ctrl+Shift+R", "macrorec", st.macro_rec),
+            mi(&format!("播放 ({} 個按鍵)", st.macro_buf.len()), "Ctrl+Shift+P", "macroplay"), mi("重複播放 10 次", "", "macroplay10"), mi("清除巨集", "", "macroclear")]),
         menu("執行", vec![mi("在預設瀏覽器中開啟", "", "runbrowser"), mi("開啟所在資料夾", "", "openfolder")]),
         menu("外掛", vec![mi("(尚無外掛)", "", "none")]),
         menu("視窗", win_items),
@@ -183,8 +208,32 @@ impl App {
         }
         self.refresh_meta();
         self.refresh_preview();
-        self.refresh_status(0);
+        let c = { let st = self.st.borrow(); let d = &st.docs[st.cur]; let c = d.cursor.min(d.text.len()); if d.text.is_char_boundary(c) { c } else { 0 } };
+        ui.invoke_select_range(c as i32, c as i32);
+        self.refresh_status(c);
         ui.invoke_focus_editor();
+        // re-apply after the TextInput has processed the new text (setting text resets the cursor)
+        let w = self.ui.clone();
+        slint::Timer::single_shot(std::time::Duration::from_millis(30), move || {
+            if let Some(ui) = w.upgrade() { if ui.get_cursor_byte() as usize != c { ui.invoke_select_range(c as i32, c as i32); } }
+        });
+    }
+
+    fn remember_cursor(&self) {
+        let c = self.ui().get_cursor_byte().max(0) as usize;
+        let mut st = self.st.borrow_mut();
+        let cur = st.cur;
+        if let Some(d) = st.docs.get_mut(cur) { d.cursor = c; }
+    }
+
+    fn persist(&self) {
+        self.remember_cursor();
+        let mut st = self.st.borrow_mut();
+        st.cfg.font = st.font; st.cfg.wrap = st.wrap; st.cfg.line_numbers = st.line_numbers; st.cfg.dark = st.dark; st.cfg.preview = st.preview;
+        st.cfg.macro_keys = st.macro_buf.clone();
+        st.cfg.session = st.docs.iter().filter_map(|d| d.path.clone().map(|p| settings::SessionFile { path: p, cursor: d.cursor })).collect();
+        st.cfg.session_cur = st.docs[..st.cur].iter().filter(|d| d.path.is_some()).count();
+        st.cfg.save();
     }
 
     fn refresh_meta(&self) {
@@ -193,7 +242,10 @@ impl App {
         let st = self.st.borrow();
         let d = &st.docs[st.cur];
         let tabs: Vec<TabInfo> = st.docs.iter().map(|d| TabInfo { title: d.title.clone().into(), modified: d.modified }).collect();
-        ui.set_tabs(ModelRc::new(VecModel::from(tabs)));
+        // only replace the model when it really changed (keeps tab TouchAreas alive during drags)
+        let model = ui.get_tabs();
+        let same = model.row_count() == tabs.len() && tabs.iter().enumerate().all(|(i, t)| model.row_data(i).as_ref() == Some(t));
+        if !same { ui.set_tabs(ModelRc::new(VecModel::from(tabs))); }
         ui.set_current_tab(st.cur as i32);
         ui.set_menus(ModelRc::new(VecModel::from(build_menus(&st))));
         let name = d.path.as_ref().map(|p| p.display().to_string()).unwrap_or(d.title.clone());
@@ -201,8 +253,10 @@ impl App {
         ui.set_word_wrap(st.wrap);
         ui.set_show_line_numbers(st.line_numbers && !st.wrap);
         ui.set_editor_font_size(st.font);
-        ui.set_show_preview(st.preview);
+        ui.set_show_preview(st.preview && matches!(d.lang.as_str(), "markdown" | "html" | "xml"));
         ui.set_overwrite(st.overwrite);
+        ui.set_dark(st.dark);
+        ui.set_macro_recording(st.macro_rec);
         ui.set_st_type(lang_desc(&d.lang).into());
         ui.set_st_eol(d.eol.label().into());
         ui.set_st_encoding(d.encoding_label().into());
@@ -232,6 +286,10 @@ impl App {
             if t.is_char_boundary(s) && t.is_char_boundary(e) { format!("    Sel : {}", t[s..e].chars().count()) } else { String::new() }
         } else { String::new() };
         ui.set_st_pos(format!("Ln : {}    Col : {}    Pos : {}{}", line, col, pos, sel).into());
+        let marks: Vec<usize> = highlight::match_bracket(t, byte).map(|(a, b)| vec![a, b]).unwrap_or_default();
+        drop(st);
+        let mut st = self.st.borrow_mut();
+        if st.marks != marks { st.marks = marks; self.ver.set(self.ver.get() + 1); }
     }
 
     fn refresh_preview(&self) {
@@ -300,8 +358,11 @@ impl App {
         let (s, enc, bom) = decode(&bytes);
         let eol = detect_eol(&s);
         let text = s.replace("\r\n", "\n").replace('\r', "\n");
+        self.remember_cursor();
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
         {
             let mut st = self.st.borrow_mut();
+            st.cfg.add_recent(path.clone());
             if let Some(i) = st.docs.iter().position(|d| d.path.as_ref() == Some(&path)) { st.cur = i; }
             else {
                 let mut d = Doc::new(0);
@@ -334,8 +395,9 @@ impl App {
             let d = &mut st.docs[idx];
             d.title = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             if d.path.as_ref() != Some(&path) { d.lang = lang_from_path(&path); }
-            d.path = Some(path);
+            d.path = Some(path.clone());
             d.modified = false;
+            st.cfg.add_recent(path);
         }
         self.refresh_meta();
         self.refresh_preview();
@@ -354,6 +416,7 @@ impl App {
                 _ => return false,
             }
         }
+        self.remember_cursor();
         {
             let mut st = self.st.borrow_mut();
             st.docs.remove(idx);
@@ -365,39 +428,208 @@ impl App {
     }
 
     fn select_tab(&self, i: usize) {
+        self.remember_cursor();
         { let mut st = self.st.borrow_mut(); if i >= st.docs.len() { return; } st.cur = i; }
         self.refresh_all();
     }
 
+    fn regex(&self) -> Option<regex::Regex> {
+        let ui = self.ui();
+        match search::build(&ui.get_find_text(), ui.get_match_case(), ui.get_whole_word(), ui.get_use_regex()) {
+            Ok(r) => Some(r),
+            Err(e) => { ui.set_find_status(e.into()); None }
+        }
+    }
+
     fn find(&self, forward: bool) -> bool {
         let ui = self.ui();
-        let needle = ui.get_find_text().to_string();
-        if needle.is_empty() { return false; }
-        let mc = ui.get_match_case();
-        let st = self.st.borrow();
-        let t = &st.docs[st.cur].text;
-        let (hay, nd) = if mc { (t.clone(), needle.clone()) } else { (t.to_lowercase(), needle.to_lowercase()) };
-        if hay.len() != t.len() { /* lowercase changed lengths: fall back to case-sensitive */ }
-        let (hay, nd) = if hay.len() == t.len() { (hay, nd) } else { (t.clone(), needle.clone()) };
+        let Some(re) = self.regex() else { return false };
         let (a, c) = (ui.get_anchor_byte() as usize, ui.get_cursor_byte() as usize);
-        let (s, e) = (a.min(c), a.max(c));
-        let found = if forward {
-            hay.get(e..).and_then(|h| h.find(&nd)).map(|p| p + e).or_else(|| hay.find(&nd))
-        } else {
-            hay.get(..s).and_then(|h| h.rfind(&nd)).or_else(|| hay.rfind(&nd))
-        };
-        drop(st);
+        let found = { let st = self.st.borrow(); search::find(&re, &st.docs[st.cur].text, a.min(c), a.max(c), forward) };
         match found {
-            Some(p) => { ui.invoke_select_range(p as i32, (p + nd.len()) as i32); ui.set_find_status("".into()); true }
-            None => { ui.set_find_status(format!("找不到「{}」", needle).into()); false }
+            Some((s, e)) => { ui.invoke_select_range(s as i32, e as i32); ui.set_find_status("".into()); true }
+            None => { ui.set_find_status(format!("找不到「{}」", ui.get_find_text()).into()); false }
         }
+    }
+
+    fn find_all(&self) {
+        let ui = self.ui();
+        let Some(re) = self.regex() else { return };
+        let mut rows = Vec::new();
+        let mut hits = Vec::new();
+        {
+            let st = self.st.borrow();
+            for (di, d) in st.docs.iter().enumerate() {
+                for m in re.find_iter(&d.text).take(5000) {
+                    if m.start() == m.end() { continue; }
+                    let ls = d.text[..m.start()].rfind('\n').map(|x| x + 1).unwrap_or(0);
+                    let le = d.text[m.start()..].find('\n').map(|x| x + m.start()).unwrap_or(d.text.len());
+                    let line = d.text[..m.start()].matches('\n').count() + 1;
+                    let snippet: String = d.text[ls..le].trim().chars().take(200).collect();
+                    rows.push(SearchHit { doc: di as i32, title: d.title.clone().into(), line: line as i32, start: m.start() as i32, end: m.end() as i32, text: snippet.into() });
+                    hits.push((di, m.start(), m.end()));
+                }
+            }
+            ui.set_hits_title(format!("搜尋「{}」：在 {} 個文件中找到 {} 筆", ui.get_find_text(), st.docs.len(), rows.len()).into());
+        }
+        self.st.borrow_mut().hits = hits;
+        ui.set_hits(ModelRc::new(VecModel::from(rows)));
+        ui.set_hits_visible(true);
+    }
+
+    fn hit_clicked(&self, i: usize) {
+        let Some(&(d, s, e)) = self.st.borrow().hits.get(i) else { return };
+        if d != self.st.borrow().cur { self.select_tab(d); }
+        let ok = { let st = self.st.borrow(); let t = &st.docs[st.cur].text; e <= t.len() && t.is_char_boundary(s) && t.is_char_boundary(e) };
+        if ok { self.ui().invoke_select_range(s as i32, e as i32); }
+    }
+
+    fn replace(&self, all: bool) {
+        let ui = self.ui();
+        let Some(re) = self.regex() else { return };
+        let r = ui.get_replace_text().to_string();
+        let rep = if ui.get_use_regex() { r.clone() } else { r.replace('$', "$$") };
+        let t = { let st = self.st.borrow(); st.docs[st.cur].text.clone() };
+        if all {
+            let c = re.find_iter(&t).count();
+            let nt = re.replace_all(&t, rep.as_str()).into_owned();
+            self.set_text(nt);
+            ui.set_find_status(format!("已取代 {} 處", c).into());
+            return;
+        }
+        let (an, cu) = (ui.get_anchor_byte() as usize, ui.get_cursor_byte() as usize);
+        let (s, e) = (an.min(cu), an.max(cu));
+        if let Some(caps) = re.captures_at(&t, s).filter(|c| { let m = c.get(0).unwrap(); m.start() == s && m.end() == e && e > s }) {
+            let mut out = String::new();
+            caps.expand(&rep, &mut out);
+            self.set_text(format!("{}{}{}", &t[..s], out, &t[e..]));
+            let p = (s + out.len()) as i32;
+            ui.invoke_select_range(p, p);
+        }
+        self.find(true);
+    }
+
+    /// Hook for every key that reaches the editor. Returns true when handled.
+    fn editor_key(&self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        let ui = self.ui();
+        if ctrl && !alt {
+            match text {
+                "z" | "Z" if !shift => { self.action_plain("undo"); return true; }
+                "y" | "Y" => { self.action_plain("redo"); return true; }
+                "z" | "Z" => { self.action_plain("redo"); return true; }
+                "b" | "B" => { self.action_plain("gotobrace"); return true; }
+                "p" | "P" if !shift => { self.action_plain("print"); return true; }
+                _ => return false,
+            }
+        }
+        {
+            let mut st = self.st.borrow_mut();
+            if st.macro_rec && !st.macro_play && !alt { st.macro_buf.push(text.to_string()); }
+        }
+        // overwrite mode: replace the next character instead of inserting
+        let ow = self.st.borrow().overwrite;
+        if ow && !alt {
+            let mut ch = text.chars();
+            if let (Some(c), None) = (ch.next(), ch.next()) {
+                if !c.is_control() && !('\u{f700}'..='\u{f8ff}').contains(&c) {
+                    let (a, cur) = (ui.get_anchor_byte() as usize, ui.get_cursor_byte() as usize);
+                    if a == cur {
+                        let st = self.st.borrow();
+                        let t = &st.docs[st.cur].text;
+                        if let Some(next) = t.get(cur..).and_then(|r| r.chars().next()) {
+                            if next != '\n' { drop(st); ui.invoke_select_range(cur as i32, (cur + next.len_utf8()) as i32); }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn action_plain(&self, a: &str) {
+        let ui = self.ui();
+        let cur = self.st.borrow().cur;
+        match a {
+            "undo" | "redo" => {
+                let ok = {
+                    let mut st = self.st.borrow_mut();
+                    let d = &mut st.docs[cur];
+                    let (from, to) = if a == "undo" { (&mut d.undo, &mut d.redo) } else { (&mut d.redo, &mut d.undo) };
+                    if let Some(t) = from.pop() { to.push(std::mem::replace(&mut d.text, t)); d.modified = true; d.last_snap = None; true } else { false }
+                };
+                if ok {
+                    let c = ui.get_cursor_byte() as usize;
+                    let t = self.st.borrow().docs[cur].text.clone();
+                    ui.set_editor_text(t.clone().into());
+                    let c = (0..=c.min(t.len())).rev().find(|x| t.is_char_boundary(*x)).unwrap_or(0) as i32;
+                    ui.invoke_select_range(c, c);
+                    self.refresh_meta(); self.refresh_preview();
+                }
+            }
+            "gotobrace" => {
+                let pos = ui.get_cursor_byte() as usize;
+                let m = { let st = self.st.borrow(); highlight::match_bracket(&st.docs[cur].text, pos) };
+                if let Some((_, j)) = m { ui.invoke_select_range(j as i32, j as i32); }
+            }
+            "print" | "exporthtml" => {
+                let (html, title, path) = {
+                    let st = self.st.borrow(); let d = &st.docs[cur];
+                    let ext = d.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase());
+                    (highlight::export_html(&d.text, &d.lang, ext.as_deref(), &d.title, false), d.title.clone(), d.path.clone())
+                };
+                let target = if a == "print" {
+                    let p = std::env::temp_dir().join(format!("notedit-print-{}.html", std::process::id()));
+                    Some(p)
+                } else {
+                    let mut dlg = rfd::FileDialog::new().set_title("匯出為 HTML").set_file_name(format!("{}.html", title)).add_filter("HTML", &["html"]);
+                    if let Some(dir) = path.as_ref().and_then(|p| p.parent()) { dlg = dlg.set_directory(dir); }
+                    dlg.save_file()
+                };
+                if let Some(p) = target {
+                    let html = if a == "print" { html.replace("</body>", "<script>window.onload=()=>window.print()</script></body>") } else { html };
+                    match std::fs::write(&p, html) { Ok(_) => { if a == "print" { open_external(&p); } } Err(e) => msg(&format!("寫入失敗：{}", e)) }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn play_macro(&self, times: usize) {
+        let keys = self.st.borrow().macro_buf.clone();
+        if keys.is_empty() { return; }
+        let ui = self.ui();
+        ui.invoke_focus_editor();
+        self.st.borrow_mut().macro_play = true;
+        // reset modifier state (the shortcut that triggered playback may still be held)
+        for k in [slint::platform::Key::Control, slint::platform::Key::Shift, slint::platform::Key::Alt, slint::platform::Key::Meta] {
+            ui.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: k.into() });
+        }
+        for _ in 0..times {
+            for k in &keys {
+                let text: SharedString = k.as_str().into();
+                ui.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+                ui.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+            }
+        }
+        self.st.borrow_mut().macro_play = false;
+    }
+
+    fn move_tab(&self, from: usize, to: usize) {
+        {
+            let mut st = self.st.borrow_mut();
+            if from >= st.docs.len() || to >= st.docs.len() || from == to { return; }
+            let d = st.docs.remove(from);
+            st.docs.insert(to, d);
+            st.cur = to;
+        }
+        self.refresh_meta();
     }
 
     fn action(self: &Rc<Self>, a: &str) {
         let ui = self.ui();
         let cur = self.st.borrow().cur;
         match a {
-            "new" => { { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
+            "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
                 if let Some(files) = rfd::FileDialog::new().set_title("開啟舊檔")
                     .add_filter("所有檔案", &["*"]).add_filter("文字/程式碼", &["txt", "md", "html", "htm", "rs", "py", "js", "json", "xml", "css", "c", "cpp", "h", "toml", "ini", "log"])
@@ -411,15 +643,28 @@ impl App {
             "closeall" => { while self.st.borrow().docs.len() > 1 || self.st.borrow().docs[0].modified || self.st.borrow().docs[0].path.is_some() { let i = self.st.borrow().docs.len() - 1; if !self.close(i) { break; } } }
             "closeothers" => { let mut i = self.st.borrow().docs.len(); while i > 0 { i -= 1; if i != self.st.borrow().cur { if !self.close(i) { break; } } } }
             "exit" => { if self.confirm_exit() { let _ = slint::quit_event_loop(); } }
-            "undo" | "redo" => {
-                let ok = {
-                    let mut st = self.st.borrow_mut();
-                    let d = &mut st.docs[cur];
-                    let (from, to) = if a == "undo" { (&mut d.undo, &mut d.redo) } else { (&mut d.redo, &mut d.undo) };
-                    if let Some(t) = from.pop() { to.push(std::mem::replace(&mut d.text, t)); d.modified = true; d.last_snap = None; true } else { false }
-                };
-                if ok { let t = self.st.borrow().docs[cur].text.clone(); ui.set_editor_text(t.into()); self.refresh_meta(); self.refresh_preview(); }
+            "undo" | "redo" | "gotobrace" | "print" | "exporthtml" => self.action_plain(a),
+            "findall" => { ui.set_find_visible(true); if !ui.get_find_text().is_empty() { self.find_all(); } }
+            "dark" => { { let mut st = self.st.borrow_mut(); st.dark = !st.dark; } self.refresh_meta(); self.persist(); }
+            "restoresession" => { { let mut st = self.st.borrow_mut(); st.cfg.restore_session = !st.cfg.restore_session; } self.refresh_meta(); self.persist(); }
+            "openconfig" => { let d = settings::config_dir(); let _ = std::fs::create_dir_all(&d); open_external(&d); }
+            "macrorec" => {
+                { let mut st = self.st.borrow_mut(); st.macro_rec = !st.macro_rec; if st.macro_rec { st.macro_buf.clear(); } }
+                self.refresh_meta();
             }
+            "macroplay" | "macroplay10" => {
+                if !self.st.borrow().macro_rec {
+                    let n = if a == "macroplay" { 1 } else { 10 };
+                    let me = self.clone();
+                    slint::Timer::single_shot(std::time::Duration::from_millis(0), move || me.play_macro(n));
+                }
+            }
+            "macroclear" => { self.st.borrow_mut().macro_buf.clear(); self.refresh_meta(); }
+            x if x.starts_with("recent:") => {
+                let p = x[7..].parse::<usize>().ok().and_then(|i| self.st.borrow().cfg.recent.get(i).cloned());
+                if let Some(p) = p { if p.exists() { self.open_path(p); } else { msg(&format!("找不到檔案：{}", p.display())); self.st.borrow_mut().cfg.recent.retain(|x| x != &p); self.refresh_meta(); } }
+            }
+            "clearrecent" => { self.st.borrow_mut().cfg.recent.clear(); self.refresh_meta(); }
             "cut" => ui.invoke_do_cut(),
             "copy" => ui.invoke_do_copy(),
             "paste" => ui.invoke_do_paste(),
@@ -484,7 +729,6 @@ impl App {
                 let stamp = format_unix(now);
                 self.set_text(format!("{}{}{}", &t[..b], stamp, &t[b..]));
             }
-            "macro" => { { let mut st = self.st.borrow_mut(); st.macro_rec = !st.macro_rec; } self.refresh_meta(); }
             "runbrowser" | "openfolder" => {
                 let p = self.st.borrow().docs[cur].path.clone();
                 if let Some(p) = p {
@@ -493,7 +737,6 @@ impl App {
                 } else { msg("請先儲存檔案。"); }
             }
             "about" => ui.set_about_visible(true),
-            "print" => msg("列印功能尚未實作。"),
             _ => {}
         }
     }
@@ -509,22 +752,25 @@ impl App {
         if lv == ver && lf == first && lc == count && done { return; }
         let t0 = Instant::now();
         let mut st = self.st.borrow_mut();
+        let ext = st.docs[st.cur].path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase());
+        let dark = st.dark;
+        let marks = st.marks.clone();
         let cur = st.cur;
-        let d = &mut st.docs[cur];
-        let ext = d.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase());
-        let Doc { hl, text, lang, .. } = d;
-        if lv != ver { hl.sync(text, lang, ext.as_deref()); }
+        let Doc { hl, text, lang, .. } = &mut st.docs[cur];
+        if lv != ver { hl.sync(text, lang, ext.as_deref(), dark); }
         let mut finished = hl.work(first + count, 300);
         while !finished && t0.elapsed().as_millis() < 25 { finished = hl.work(first + count, 300); }
         ui.set_hl_active(hl.active());
-        if hl.active() { ui.set_hl_lines(ModelRc::new(VecModel::from(hl.visible(first, count)))); }
+        let fg = if dark { slint::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { slint::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
+        ui.set_hl_lines(ModelRc::new(VecModel::from(hl.visible(first, count, fg, &marks))));
         self.last.set((ver, first, count, finished));
     }
 
     fn confirm_exit(&self) -> bool {
+        self.persist();
         loop {
             let idx = self.st.borrow().docs.iter().position(|d| d.modified);
-            match idx { Some(i) => { self.st.borrow_mut().cur = i; self.refresh_all(); if !self.close(i) { return false; } } None => return true }
+            match idx { Some(i) => { self.st.borrow_mut().cur = i; self.refresh_all(); if !self.close(i) { return false; } } None => { return true; } }
         }
     }
 }
@@ -552,7 +798,10 @@ fn msg(s: &str) {
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
-    let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: 14.0, wrap: false, line_numbers: true, preview: false, overwrite: false, macro_rec: false };
+    let cfg = settings::Settings::load();
+    let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: cfg.font.clamp(6.0, 48.0), wrap: cfg.wrap, line_numbers: cfg.line_numbers,
+        preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
+        marks: vec![], hits: vec![], cfg };
     let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), ver: Default::default(), last: std::cell::Cell::new((u64::MAX, 0, 0, false)) });
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
@@ -563,37 +812,17 @@ fn main() -> Result<(), slint::PlatformError> {
     cb!(on_tab_close, |a, i: i32| { a.close(i as usize); });
     cb!(on_find_next, |a, f: bool| { a.find(f); });
     cb!(on_count_matches, |a| {
-        let ui = a.ui(); let n = ui.get_find_text().to_string();
-        if !n.is_empty() { let st = a.st.borrow(); let t = &st.docs[st.cur].text;
-            let c = if ui.get_match_case() { t.matches(&n).count() } else { t.to_lowercase().matches(&n.to_lowercase()).count() };
-            ui.set_find_status(format!("計數：{} 個符合項目", c).into()); }
+        if let Some(re) = a.regex() { let st = a.st.borrow(); let c = re.find_iter(&st.docs[st.cur].text).count(); a.ui().set_find_status(format!("計數：{} 個符合項目", c).into()); }
     });
-    cb!(on_replace_one, |a| {
-        let ui = a.ui(); let n = ui.get_find_text().to_string(); let r = ui.get_replace_text().to_string();
-        let t = a.st.borrow().docs[a.st.borrow().cur].text.clone();
-        let (an, cu) = (ui.get_anchor_byte() as usize, ui.get_cursor_byte() as usize);
-        let (s, e) = (an.min(cu), an.max(cu));
-        let sel = t.get(s..e).unwrap_or("");
-        let hit = if ui.get_match_case() { sel == n } else { sel.to_lowercase() == n.to_lowercase() };
-        if hit && !n.is_empty() {
-            a.set_text(format!("{}{}{}", &t[..s], r, &t[e..]));
-            let p = (s + r.len()) as i32; ui.invoke_select_range(p, p);
-        }
-        a.find(true);
-    });
-    cb!(on_replace_all, |a| {
-        let ui = a.ui(); let n = ui.get_find_text().to_string(); let r = ui.get_replace_text().to_string();
-        if n.is_empty() { return; }
-        let t = a.st.borrow().docs[a.st.borrow().cur].text.clone();
-        let (nt, c) = if ui.get_match_case() { (t.replace(&n, &r), t.matches(&n).count()) } else {
-            let low = t.to_lowercase(); let nl = n.to_lowercase();
-            if low.len() != t.len() { (t.replace(&n, &r), t.matches(&n).count()) } else {
-                let mut out = String::new(); let mut last = 0; let mut c = 0;
-                for (i, _) in low.match_indices(&nl) { out.push_str(&t[last..i]); out.push_str(&r); last = i + n.len(); c += 1; }
-                out.push_str(&t[last..]); (out, c) } };
-        a.set_text(nt);
-        ui.set_find_status(format!("已取代 {} 處", c).into());
-    });
+    cb!(on_replace_one, |a| { a.replace(false) });
+    cb!(on_replace_all, |a| { a.replace(true) });
+    cb!(on_find_all, |a| { a.find_all() });
+    cb!(on_hit_clicked, |a, i: i32| { a.hit_clicked(i.max(0) as usize) });
+    cb!(on_tab_move, |a, f: i32, t: i32| { a.move_tab(f.max(0) as usize, t.max(0) as usize) });
+    {
+        let a = app.clone();
+        ui.on_editor_key(move |t: SharedString, c: bool, s: bool, al: bool| a.editor_key(&t, c, s, al));
+    }
     cb!(on_goto_line, |a, s: SharedString| {
         let ui = a.ui();
         if let Ok(n) = s.trim().parse::<usize>() {
@@ -604,9 +833,39 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    // open files passed on command line
-    for arg in std::env::args().skip(1) { app.open_path(PathBuf::from(arg)); }
+    // open files passed on command line, otherwise restore last session
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() && app.st.borrow().cfg.restore_session {
+        let (files, sel) = { let st = app.st.borrow(); (st.cfg.session.clone(), st.cfg.session_cur) };
+        for f in files.iter().filter(|f| f.path.exists()) { app.open_path(f.path.clone()); }
+        for f in &files {
+            let p = std::fs::canonicalize(&f.path).unwrap_or(f.path.clone());
+            let mut st = app.st.borrow_mut();
+            if let Some(d) = st.docs.iter_mut().find(|d| d.path.as_ref() == Some(&p)) { d.cursor = f.cursor; }
+        }
+        let n = app.st.borrow().docs.len();
+        app.st.borrow_mut().cur = sel.min(n - 1);
+    }
+    for arg in args { app.open_path(PathBuf::from(arg)); }
     app.refresh_all();
+
+    // drag & drop files from the OS
+    {
+        let a = app.clone();
+        let pending: Rc<RefCell<Vec<PathBuf>>> = Default::default();
+        ui.window().on_winit_window_event(move |_w, ev| {
+            if let winit::event::WindowEvent::DroppedFile(p) = ev {
+                pending.borrow_mut().push(p.clone());
+                let (a, pending) = (a.clone(), pending.clone());
+                // defer: the event filter must not re-enter the UI synchronously
+                slint::Timer::single_shot(std::time::Duration::from_millis(0), move || {
+                    let files: Vec<PathBuf> = pending.borrow_mut().drain(..).collect();
+                    for f in files { if f.is_file() { a.open_path(f); } }
+                });
+            }
+            WinitWindowEventResult::Propagate
+        });
+    }
 
     let a3 = app.clone();
     let timer = slint::Timer::default();
