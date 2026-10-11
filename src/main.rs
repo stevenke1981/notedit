@@ -100,6 +100,9 @@ struct State {
     marks: Vec<usize>,
     hits: Vec<(usize, usize, usize)>,
     cfg: settings::Settings,
+    font_family: String,
+    font_choices: Vec<String>,
+    ctx_tab: usize,
 }
 
 fn decode(bytes: &[u8]) -> (String, &'static encoding_rs::Encoding, bool) {
@@ -136,10 +139,25 @@ fn detect_eol(s: &str) -> Eol {
 }
 
 fn mi(label: &str, shortcut: &str, action: &str) -> MenuItem {
-    MenuItem { label: label.into(), shortcut: shortcut.into(), action: action.into(), separator: false, checked: false }
+    MenuItem { label: label.into(), shortcut: shortcut.into(), action: action.into(), separator: false, checked: false, enabled: true }
 }
-fn sep() -> MenuItem { MenuItem { label: "".into(), shortcut: "".into(), action: "".into(), separator: true, checked: false } }
+fn sep() -> MenuItem { MenuItem { label: "".into(), shortcut: "".into(), action: "".into(), separator: true, checked: false, enabled: false } }
+fn en(label: &str, shortcut: &str, action: &str, e: bool) -> MenuItem { let mut m = mi(label, shortcut, action); m.enabled = e; m }
 fn chk(label: &str, shortcut: &str, action: &str, c: bool) -> MenuItem { let mut m = mi(label, shortcut, action); m.checked = c; m }
+
+const BUNDLED_FONTS: &[&str] = &["JetBrains Mono", "DejaVu Sans Mono"];
+const SYSTEM_MONO_FONTS: &[&str] = &["Cascadia Code", "Cascadia Mono", "Consolas", "Fira Code", "Fira Mono", "Source Code Pro", "Hack",
+    "Ubuntu Mono", "Noto Sans Mono", "Menlo", "SF Mono", "Monaco", "Courier New", "Sarasa Mono TC", "Roboto Mono", "Iosevka"];
+
+/// Bundled fonts plus well-known programming fonts that are installed on this system.
+fn detect_fonts() -> Vec<String> {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    let installed: std::collections::HashSet<String> = db.faces().flat_map(|f| f.families.iter().map(|(n, _)| n.to_lowercase())).collect();
+    BUNDLED_FONTS.iter().map(|s| s.to_string())
+        .chain(SYSTEM_MONO_FONTS.iter().filter(|f| installed.contains(&f.to_lowercase())).map(|s| s.to_string()))
+        .collect()
+}
 
 fn recent_items(st: &State) -> Vec<MenuItem> {
     if st.cfg.recent.is_empty() { return vec![mi("(無最近開啟的檔案)", "", "none")]; }
@@ -182,7 +200,8 @@ fn build_menus(st: &State) -> Vec<Menu> {
         menu("語言", lang_items),
         menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
-            mi("開啟設定檔所在資料夾", "", "openconfig")]),
+            mi("開啟設定檔所在資料夾", "", "openconfig"), sep()]
+            .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
         menu("工具", vec![mi("統計 (字數/行數)", "", "stats"), mi("插入日期時間", "", "datetime")]),
         menu("巨集", vec![chk(if st.macro_rec { "停止錄製" } else { "開始錄製" }, "Ctrl+Shift+R", "macrorec", st.macro_rec),
             mi(&format!("播放 ({} 個按鍵)", st.macro_buf.len()), "Ctrl+Shift+P", "macroplay"), mi("重複播放 10 次", "", "macroplay10"), mi("清除巨集", "", "macroclear")]),
@@ -229,7 +248,7 @@ impl App {
     fn persist(&self) {
         self.remember_cursor();
         let mut st = self.st.borrow_mut();
-        st.cfg.font = st.font; st.cfg.wrap = st.wrap; st.cfg.line_numbers = st.line_numbers; st.cfg.dark = st.dark; st.cfg.preview = st.preview;
+        st.cfg.font = st.font; st.cfg.font_family = st.font_family.clone(); st.cfg.wrap = st.wrap; st.cfg.line_numbers = st.line_numbers; st.cfg.dark = st.dark; st.cfg.preview = st.preview;
         st.cfg.macro_keys = st.macro_buf.clone();
         st.cfg.session = st.docs.iter().filter_map(|d| d.path.clone().map(|p| settings::SessionFile { path: p, cursor: d.cursor })).collect();
         st.cfg.session_cur = st.docs[..st.cur].iter().filter(|d| d.path.is_some()).count();
@@ -256,6 +275,7 @@ impl App {
         ui.set_show_preview(st.preview && matches!(d.lang.as_str(), "markdown" | "html" | "xml"));
         ui.set_overwrite(st.overwrite);
         ui.set_dark(st.dark);
+        ui.set_mono(st.font_family.as_str().into());
         ui.set_macro_recording(st.macro_rec);
         ui.set_st_type(lang_desc(&d.lang).into());
         ui.set_st_eol(d.eol.label().into());
@@ -614,6 +634,96 @@ impl App {
         self.st.borrow_mut().macro_play = false;
     }
 
+    fn selection(&self) -> (usize, usize) {
+        let ui = self.ui();
+        let (a, c) = (ui.get_anchor_byte().max(0) as usize, ui.get_cursor_byte().max(0) as usize);
+        (a.min(c), a.max(c))
+    }
+
+    fn context_menu(&self, kind: &str, index: i32) {
+        let ui = self.ui();
+        let items = if kind == "tab" {
+            let i = (index.max(0) as usize).min(self.st.borrow().docs.len() - 1);
+            self.st.borrow_mut().ctx_tab = i;
+            let st = self.st.borrow();
+            let n = st.docs.len();
+            let has_path = st.docs[i].path.is_some();
+            vec![en("關閉", "Ctrl+W", "ctx:close", true), en("關閉其他分頁", "", "ctx:closeothers", n > 1),
+                 en("關閉右側所有分頁", "", "ctx:closeright", i + 1 < n), en("關閉左側所有分頁", "", "ctx:closeleft", i > 0), sep(),
+                 en("儲存", "Ctrl+S", "ctx:save", true), en("另存新檔...", "", "ctx:saveas", true), en("重新命名...", "", "ctx:rename", true), sep(),
+                 en("複製完整路徑", "", "ctx:copypath", has_path), en("複製檔名", "", "ctx:copyname", true), en("開啟所在資料夾", "", "ctx:openfolder", has_path)]
+        } else {
+            let (s, e) = self.selection();
+            let sel = e > s;
+            let st = self.st.borrow();
+            let d = &st.docs[st.cur];
+            let pv = matches!(d.lang.as_str(), "markdown" | "html" | "xml");
+            vec![en("復原", "Ctrl+Z", "undo", !d.undo.is_empty()), en("取消復原", "Ctrl+Y", "redo", !d.redo.is_empty()), sep(),
+                 en("剪下", "Ctrl+X", "cut", sel), en("複製", "Ctrl+C", "copy", sel), en("貼上", "Ctrl+V", "paste", true), en("刪除", "Del", "delete", sel), en("全選", "Ctrl+A", "selectall", !d.text.is_empty()), sep(),
+                 en("轉成大寫", "", "upper", sel), en("轉成小寫", "", "lower", sel), en("複製目前行", "Ctrl+D", "dupline", true), en("刪除目前行", "", "delline", true), sep(),
+                 en("註解 / 取消註解", "Ctrl+Q", "comment", comment_syntax(&d.lang).is_some()), en("搜尋選取的文字", "", "searchsel", sel), sep(),
+                 chk(if st.preview { "關閉預覽" } else { "開啟預覽" }, "", "preview", false)].into_iter().map(|mut m| { if m.action == "preview" { m.enabled = pv; } m }).collect()
+        };
+        ui.set_ctx_items(ModelRc::new(VecModel::from(items)));
+        ui.set_ctx_visible(true);
+    }
+
+    fn ctx_action(self: &Rc<Self>, a: &str) {
+        let ui = self.ui();
+        let i = self.st.borrow().ctx_tab.min(self.st.borrow().docs.len() - 1);
+        let n = self.st.borrow().docs.len();
+        match a {
+            "close" => { self.close(i); }
+            "closeothers" => { for j in (0..n).rev() { if j != i && !self.close(j) { break; } } }
+            "closeright" => { for j in (i + 1..n).rev() { if !self.close(j) { break; } } }
+            "closeleft" => { for j in (0..i).rev() { if !self.close(j) { break; } } }
+            "save" | "saveas" => { self.save(i, a == "saveas"); }
+            "rename" => { let t = self.st.borrow().docs[i].title.clone(); ui.set_rename_text(t.into()); ui.set_rename_visible(true); }
+            "copypath" | "copyname" => {
+                let st = self.st.borrow(); let d = &st.docs[i];
+                let t = if a == "copypath" { d.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default() } else { d.title.clone() };
+                if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
+            }
+            "openfolder" => { if let Some(p) = self.st.borrow().docs[i].path.as_ref().and_then(|p| p.parent()) { open_external(p); } }
+            _ => {}
+        }
+    }
+
+    fn rename(&self, name: String) {
+        let name = name.trim().to_string();
+        let ui = self.ui();
+        if name.is_empty() || name.contains(['/', '\\']) { return; }
+        let i = self.st.borrow().ctx_tab.min(self.st.borrow().docs.len() - 1);
+        let path = self.st.borrow().docs[i].path.clone();
+        if let Some(old) = path {
+            let new = old.with_file_name(&name);
+            if new.exists() { msg(&format!("檔案已存在：{}", new.display())); return; }
+            if let Err(e) = std::fs::rename(&old, &new) { msg(&format!("重新命名失敗：{}", e)); return; }
+            let mut st = self.st.borrow_mut();
+            st.docs[i].lang = lang_from_path(&new);
+            st.docs[i].path = Some(new.clone());
+            st.cfg.recent.retain(|x| x != &old);
+            st.cfg.add_recent(new);
+        }
+        self.st.borrow_mut().docs[i].title = name;
+        ui.set_rename_visible(false);
+        self.refresh_meta();
+    }
+
+    fn toggle_comment(&self) {
+        let (pre, post) = { let st = self.st.borrow(); match comment_syntax(&st.docs[st.cur].lang) { Some(c) => c, None => return } };
+        let t = { let st = self.st.borrow(); st.docs[st.cur].text.clone() };
+        let (s, e) = self.selection();
+        let ls = t[..s.min(t.len())].rfind('\n').map(|x| x + 1).unwrap_or(0);
+        let e2 = if e > s && t[..e].ends_with('\n') { e - 1 } else { e };
+        let le = t[e2.min(t.len())..].find('\n').map(|x| x + e2).unwrap_or(t.len());
+        let block = &t[ls..le];
+        let new = toggle_comment_lines(block, pre, post);
+        let nt = format!("{}{}{}", &t[..ls], new, &t[le..]);
+        self.set_text(nt);
+        self.ui().invoke_select_range(ls as i32, (ls + new.len()) as i32);
+    }
+
     fn move_tab(&self, from: usize, to: usize) {
         {
             let mut st = self.st.borrow_mut();
@@ -647,6 +757,19 @@ impl App {
             "findall" => { ui.set_find_visible(true); if !ui.get_find_text().is_empty() { self.find_all(); } }
             "dark" => { { let mut st = self.st.borrow_mut(); st.dark = !st.dark; } self.refresh_meta(); self.persist(); }
             "restoresession" => { { let mut st = self.st.borrow_mut(); st.cfg.restore_session = !st.cfg.restore_session; } self.refresh_meta(); self.persist(); }
+            x if x.starts_with("ctx:") => self.ctx_action(&x[4..]),
+            "delete" => { let (s, e) = self.selection(); if e > s { let t = self.st.borrow().docs[cur].text.clone(); self.set_text(format!("{}{}", &t[..s], &t[e..])); ui.invoke_select_range(s as i32, s as i32); } }
+            "comment" => self.toggle_comment(),
+            "searchsel" => {
+                let (s, e) = self.selection();
+                let t = self.st.borrow().docs[cur].text.get(s..e).unwrap_or("").to_string();
+                if !t.is_empty() { ui.set_find_text(t.into()); ui.set_use_regex(false); ui.set_find_visible(true); self.find(true); }
+            }
+            x if x.starts_with("font:") => {
+                { let mut st = self.st.borrow_mut(); st.font_family = x[5..].to_string(); }
+                self.ver.set(self.ver.get() + 1);
+                self.refresh_meta(); self.persist();
+            }
             "openconfig" => { let d = settings::config_dir(); let _ = std::fs::create_dir_all(&d); open_external(&d); }
             "macrorec" => {
                 { let mut st = self.st.borrow_mut(); st.macro_rec = !st.macro_rec; if st.macro_rec { st.macro_buf.clear(); } }
@@ -775,6 +898,57 @@ impl App {
     }
 }
 
+/// line comment prefix, or (open, close) for block-only languages
+fn comment_syntax(lang: &str) -> Option<(&'static str, &'static str)> {
+    Some(match lang {
+        "rust" | "c" | "cpp" | "cs" | "java" | "javascript" | "json" | "slint" => ("// ", ""),
+        "python" | "shell" | "yaml" => ("# ", ""),
+        "ini" => ("; ", ""),
+        "sql" => ("-- ", ""),
+        "batch" => ("REM ", ""),
+        "html" | "xml" | "markdown" => ("<!-- ", " -->"),
+        "css" => ("/* ", " */"),
+        _ => return None,
+    })
+}
+
+/// Toggle comments on every non-empty line of `block` (remove if all are commented).
+fn toggle_comment_lines(block: &str, pre: &str, post: &str) -> String {
+    let lines: Vec<&str> = block.split('\n').collect();
+    let (p, q) = (pre.trim_end(), post.trim_start());
+    let is_c = |l: &str| { let t = l.trim_start(); t.starts_with(p) && (q.is_empty() || t.trim_end().ends_with(q)) };
+    let nonempty: Vec<&&str> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+    let all = !nonempty.is_empty() && nonempty.iter().all(|l| is_c(l));
+    let indent = nonempty.iter().map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+    lines.iter().map(|l| {
+        if l.trim().is_empty() { return l.to_string(); }
+        if all {
+            let ws = l.len() - l.trim_start().len();
+            let mut body = &l[ws..];
+            body = body.strip_prefix(pre).or_else(|| body.strip_prefix(p)).unwrap_or(body);
+            if !q.is_empty() { let b = body.trim_end(); body = b.strip_suffix(post).or_else(|| b.strip_suffix(q)).unwrap_or(b); }
+            format!("{}{}", &l[..ws], body)
+        } else {
+            format!("{}{}{}{}", &l[..indent], pre, &l[indent..], post)
+        }
+    }).collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn comments() {
+        let b = "fn a() {\n    x();\n}";
+        let c = toggle_comment_lines(b, "// ", "");
+        assert_eq!(c, "// fn a() {\n//     x();\n// }");
+        assert_eq!(toggle_comment_lines(&c, "// ", ""), b);
+        let h = toggle_comment_lines("  <p>x</p>", "<!-- ", " -->");
+        assert_eq!(h, "  <!-- <p>x</p> -->");
+        assert_eq!(toggle_comment_lines(&h, "<!-- ", " -->"), "  <p>x</p>");
+    }
+}
+
 fn format_unix(secs: u64) -> String {
     // UTC date-time without extra crates (civil-from-days algorithm)
     let days = (secs / 86400) as i64; let rem = secs % 86400;
@@ -801,7 +975,8 @@ fn main() -> Result<(), slint::PlatformError> {
     let cfg = settings::Settings::load();
     let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: cfg.font.clamp(6.0, 48.0), wrap: cfg.wrap, line_numbers: cfg.line_numbers,
         preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
-        marks: vec![], hits: vec![], cfg };
+        marks: vec![], hits: vec![], font_family: if cfg.font_family.trim().is_empty() { "JetBrains Mono".into() } else { cfg.font_family.clone() },
+        font_choices: detect_fonts(), ctx_tab: 0, cfg };
     let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), ver: Default::default(), last: std::cell::Cell::new((u64::MAX, 0, 0, false)) });
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
@@ -818,6 +993,8 @@ fn main() -> Result<(), slint::PlatformError> {
     cb!(on_replace_all, |a| { a.replace(true) });
     cb!(on_find_all, |a| { a.find_all() });
     cb!(on_hit_clicked, |a, i: i32| { a.hit_clicked(i.max(0) as usize) });
+    cb!(on_context_request, |a, k: SharedString, i: i32| { a.context_menu(&k, i) });
+    cb!(on_rename_accepted, |a, t: SharedString| { a.rename(t.to_string()) });
     cb!(on_tab_move, |a, f: i32, t: i32| { a.move_tab(f.max(0) as usize, t.max(0) as usize) });
     {
         let a = app.clone();
@@ -853,7 +1030,15 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let a = app.clone();
         let pending: Rc<RefCell<Vec<PathBuf>>> = Default::default();
-        ui.window().on_winit_window_event(move |_w, ev| {
+        let cursor = std::cell::Cell::new((0.0f64, 0.0f64));
+        ui.window().on_winit_window_event(move |w, ev| {
+            if let winit::event::WindowEvent::CursorMoved { position, .. } = ev { cursor.set((position.x, position.y)); }
+            if let winit::event::WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, button: winit::event::MouseButton::Right, .. } = ev {
+                let sf = w.scale_factor() as f64;
+                let (x, y) = cursor.get();
+                let (a, x, y) = (a.clone(), (x / sf) as f32, (y / sf) as f32);
+                slint::Timer::single_shot(std::time::Duration::from_millis(0), move || a.ui().invoke_editor_right_click(x, y));
+            }
             if let winit::event::WindowEvent::DroppedFile(p) = ev {
                 pending.borrow_mut().push(p.clone());
                 let (a, pending) = (a.clone(), pending.clone());

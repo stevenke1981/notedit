@@ -9,6 +9,7 @@ pub struct SessionFile { pub path: PathBuf, pub cursor: usize }
 #[serde(default)]
 pub struct Settings {
     pub font: f32,
+    pub font_family: String,
     pub wrap: bool,
     pub line_numbers: bool,
     pub dark: bool,
@@ -22,7 +23,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: 14.0, wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
+        Settings { font: 14.0, font_family: "JetBrains Mono".into(), wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
                    recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![] }
     }
 }
@@ -67,6 +68,6 @@ mod tests {
         let back: Settings = serde_json::from_str(&j).unwrap();
         assert_eq!(back.recent, s.recent);
         let partial: Settings = serde_json::from_str("{\"dark\":true}").unwrap();
-        assert!(partial.dark && partial.font == 14.0);
+        assert!(partial.dark && partial.font == 14.0 && partial.font_family == "JetBrains Mono");
     }
 }

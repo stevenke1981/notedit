@@ -1,12 +1,14 @@
 [package]
 license = "MIT"
 name = "notedit"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 [dependencies]
+arboard = { version = "3", default-features = false }
 chardetng = "1.0.0"
 encoding_rs = "0.8.35"
+fontdb = "0.22"
 i-slint-backend-winit = "=1.9.2"
 pulldown-cmark = { version = "0.12", default-features = false }
 regex = "1.13.1"

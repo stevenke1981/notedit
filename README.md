@@ -33,7 +33,8 @@
 - **語言**：依副檔名辨識約 19 種語言，可手動切換
 - **狀態列**：檔案類型、length / lines、Ln / Col / Pos / Sel、換行格式、編碼、INS/OVR、巨集錄製指示
 - **程式圖示**：視窗圖示與 Windows exe 圖示
-- **等寬字型**：內嵌 DejaVu Sans Mono
+- **右鍵選單**：編輯區（復原/取消復原、剪下/複製/貼上/刪除、全選、大小寫、複製/刪除行、註解/取消註解 Ctrl+Q、搜尋選取文字、預覽）與分頁（關閉/關閉其他/關閉左側/右側、儲存、另存、重新命名、複製完整路徑/檔名、開啟所在資料夾），不可用項目會變灰
+- **字型**：預設為內嵌的 **JetBrains Mono**（SIL OFL 授權），另內嵌 DejaVu Sans Mono；「設定」選單可切換，並自動列出系統已安裝的 Cascadia Code、Consolas、Fira Code、Source Code Pro 等程式字型，選擇會保存。中文字由系統字型自動補字（Windows：微軟正黑體；Linux：Noto Sans CJK）
 
 ## 建置
 
@@ -55,4 +56,4 @@ Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-d
 
 ## 授權
 
-MIT License，詳見 [LICENSE](LICENSE)。內嵌字型 DejaVu Sans Mono 授權見 `ui/fonts/LICENSE-DejaVu.txt`。
+MIT License，詳見 [LICENSE](LICENSE)。內嵌字型：JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）、DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`）。
