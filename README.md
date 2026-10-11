@@ -2,6 +2,14 @@
 
 以 **Rust + [Slint](https://slint.dev)** 製作的類 Notepad++ 文字編輯器，內建簡易 **HTML / Markdown 預覽**。介面為繁體中文。
 
+## 下載
+
+請至 **[Releases 頁面](https://github.com/stevenke1981/notedit/releases/latest)** 下載最新版本：
+
+- Windows：`notedit-windows-x64.zip`（解壓後執行 `notedit.exe`）
+- Linux：`notedit-linux-x64.tar.gz`
+- macOS (Apple Silicon)：`notedit-macos-arm64.tar.gz`
+
 ![截圖](docs/screenshot.png)
 
 ## 功能
@@ -32,7 +40,7 @@ cargo build --release
 
 Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`。
 
-Windows / Linux / macOS 執行檔由 GitHub Actions 自動建置，可於 Actions 頁面的 Artifacts 下載。
+推送 `v*` 標籤時，GitHub Actions 會自動建置 Windows / Linux / macOS 並發佈到 Releases。
 
 ## 已知限制（相較 Notepad++）
 
@@ -41,3 +49,7 @@ Windows / Linux / macOS 執行檔由 GitHub Actions 自動建置，可於 Action
 - 預覽為簡化版：區塊層級樣式（標題、清單、引用、程式碼、連結），行內粗體/斜體以整段套用；不支援 CSS、圖片、表格版面
 - 覆寫模式僅為狀態指示；巨集、外掛、程式碼摺疊、多重選取、分割視窗、正規表示式搜尋、自動完成、工作階段保存尚未實作
 - 開啟自動換行時隱藏行號
+
+## 授權
+
+MIT License，詳見 [LICENSE](LICENSE)。內嵌字型 DejaVu Sans Mono 授權見 `ui/fonts/LICENSE-DejaVu.txt`。
