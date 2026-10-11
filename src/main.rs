@@ -164,7 +164,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
         menu("執行", vec![mi("在預設瀏覽器中開啟", "", "runbrowser"), mi("開啟所在資料夾", "", "openfolder")]),
         menu("外掛", vec![mi("(尚無外掛)", "", "none")]),
         menu("視窗", win_items),
-        menu("?", vec![mi("關於 Slint Notepad...", "F1", "about")]),
+        menu("?", vec![mi("關於 NotEdit...", "F1", "about")]),
     ]
 }
 
@@ -197,7 +197,7 @@ impl App {
         ui.set_current_tab(st.cur as i32);
         ui.set_menus(ModelRc::new(VecModel::from(build_menus(&st))));
         let name = d.path.as_ref().map(|p| p.display().to_string()).unwrap_or(d.title.clone());
-        ui.set_window_title(format!("{}{} - Slint Notepad", if d.modified { "*" } else { "" }, name).into());
+        ui.set_window_title(format!("{}{} - NotEdit", if d.modified { "*" } else { "" }, name).into());
         ui.set_word_wrap(st.wrap);
         ui.set_show_line_numbers(st.line_numbers && !st.wrap);
         ui.set_editor_font_size(st.font);
@@ -346,7 +346,7 @@ impl App {
     fn close(&self, idx: usize) -> bool {
         let (modified, title) = { let st = self.st.borrow(); (st.docs[idx].modified, st.docs[idx].title.clone()) };
         if modified {
-            let r = rfd::MessageDialog::new().set_title("Slint Notepad").set_description(format!("是否儲存「{}」的變更？", title))
+            let r = rfd::MessageDialog::new().set_title("NotEdit").set_description(format!("是否儲存「{}」的變更？", title))
                 .set_buttons(rfd::MessageButtons::YesNoCancel).show();
             match r {
                 rfd::MessageDialogResult::Yes => { if !self.save(idx, false) { return false; } }
@@ -493,6 +493,7 @@ impl App {
                 } else { msg("請先儲存檔案。"); }
             }
             "about" => ui.set_about_visible(true),
+            "print" => msg("列印功能尚未實作。"),
             _ => {}
         }
     }
@@ -546,7 +547,7 @@ fn open_external(p: &std::path::Path) {
 }
 
 fn msg(s: &str) {
-    rfd::MessageDialog::new().set_title("Slint Notepad").set_description(s).set_buttons(rfd::MessageButtons::Ok).show();
+    rfd::MessageDialog::new().set_title("NotEdit").set_description(s).set_buttons(rfd::MessageButtons::Ok).show();
 }
 
 fn main() -> Result<(), slint::PlatformError> {

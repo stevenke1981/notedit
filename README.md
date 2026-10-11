@@ -1,4 +1,4 @@
-# Slint Notepad
+# NotEdit
 
 以 **Rust + [Slint](https://slint.dev)** 製作的類 Notepad++ 文字編輯器，內建簡易 **HTML / Markdown 預覽**。介面為繁體中文。
 
@@ -7,7 +7,7 @@
 ## 功能
 
 - **選單列**：檔案、編輯、搜尋、檢視、編碼、語言、設定、工具、巨集、執行、外掛、視窗、?
-- **工具列**：新增、開啟、儲存、全部儲存、關閉、剪下/複製/貼上、復原/取消復原、尋找、取代、放大/縮小、自動換行、行號、預覽
+- **工具列**：SVG 圖示（ui/icons）與滑鼠提示，包含 新增、開啟、儲存、全部儲存、關閉、剪下/複製/貼上、復原/取消復原、尋找、取代、放大/縮小、自動換行、行號、預覽
 - **多分頁**：分頁顯示修改狀態（● 未儲存 / ○ 已儲存），可點 ✕ 關閉，Ctrl+Tab 切換
 - **檔案**：開新檔案、開啟（可多選、可從命令列帶入檔案）、重新載入、儲存、另存新檔、全部儲存、關閉 / 全部關閉 / 關閉其他；未儲存時詢問
 - **編輯**：復原 / 取消復原（Ctrl+Z / Ctrl+Y）、剪下 / 複製 / 貼上 / 全選、複製目前行（Ctrl+D）、刪除目前行、轉大寫 / 小寫、移除行尾空白、排序行
@@ -16,6 +16,7 @@
 - **編碼**：自動偵測（BOM / UTF-8 / chardetng），支援 UTF-8、UTF-8-BOM、UTF-16 LE/BE、Big5、GBK、Shift-JIS、Windows-1252，儲存時依選擇的編碼轉換
 - **換行格式**：自動偵測 CRLF / LF / CR，可轉換
 - **語法上色**：使用 syntect（純 Rust regex-fancy，InspiredGitHub 配色），僅渲染可見行並快取每行解析狀態，編輯時從變更行起增量重算，數千行檔案仍流暢
+- **程式圖示**：視窗圖示與 Windows exe 圖示（ui/icon.ico）
 - **等寬字型**：內嵌 DejaVu Sans Mono（授權見 `ui/fonts/LICENSE-DejaVu.txt`）
 - **語言**：依副檔名辨識（Rust、C/C++、C#、Java、Python、JS、HTML、CSS、XML、JSON、Markdown、Shell、Batch、INI、SQL、YAML、Slint…），可手動切換
 - **狀態列**：檔案類型、length / lines、Ln / Col / Pos / Sel、換行格式、編碼、INS/OVR
@@ -26,7 +27,7 @@
 
 ```bash
 cargo build --release
-./target/release/slint-notepad [檔案...]
+./target/release/notedit [檔案...]
 ```
 
 Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`。

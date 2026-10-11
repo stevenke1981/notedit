@@ -10,14 +10,20 @@ export struct TabInfo { title: string, modified: bool }
 export struct Block { text: string, kind: int, indent: int, bold: bool, italic: bool, code: bool, link: bool }
 
 component ToolBtn inherits Rectangle {
-    in property <string> icon; in property <string> tip;
+    in property <image> icon; in property <string> tip;
     callback clicked;
-    width: 26px; height: 24px; border-radius: 3px;
-    background: ta.has-hover ? #cce4f7 : transparent;
+    callback hover(string, length, bool);
+    width: 24px; height: 24px; border-radius: 3px;
+    background: ta.pressed ? #99c9ef : ta.has-hover ? #cce4f7 : transparent;
     border-width: ta.has-hover ? 1px : 0; border-color: #99c9ef;
-    Text { text: icon; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; color: #333; }
-    ta := TouchArea { clicked => { root.clicked(); } }
+    Image { source: icon; width: 16px; height: 16px; x: 4px; y: 4px; }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        changed has-hover => { root.hover(tip, root.absolute-position.x, self.has-hover); }
+    }
 }
+
+component Sep inherits Rectangle { width: 9px; Rectangle { x: 4px; width: 1px; height: 18px; background: #c8c8c8; } }
 
 component Dialog inherits Rectangle {
     in property <string> title;
@@ -41,7 +47,7 @@ export component AppWindow inherits Window {
     icon: @image-url("icon.png");
     default-font-size: 13px;
 
-    in property <string> window-title: "Slint Notepad";
+    in property <string> window-title: "NotEdit";
     in property <[Menu]> menus;
     in property <[TabInfo]> tabs;
     in-out property <int> current-tab: 0;
@@ -100,6 +106,8 @@ export component AppWindow inherits Window {
     public function scroll-top() { flick.viewport-y = 0; flick.viewport-x = 0; }
 
     property <int> open-menu: -1;
+    property <string> tip-text; property <length> tip-x; property <bool> tip-on;
+    function show-tip(t: string, x: length, h: bool) { tip-text = t; tip-x = x; tip-on = h; }
 
     forward-focus: keys;
     keys := FocusScope {
@@ -146,28 +154,31 @@ export component AppWindow inherits Window {
         // ---- toolbar ----
         Rectangle { height: 30px; background: #f0f0f0; border-color: #ddd; border-width: 0;
             HorizontalLayout { padding: 3px; spacing: 1px;
-                ToolBtn { icon: "新"; clicked => { menu-action("new"); } }
-                ToolBtn { icon: "開"; clicked => { menu-action("open"); } }
-                ToolBtn { icon: "存"; clicked => { menu-action("save"); } }
-                ToolBtn { icon: "全"; clicked => { menu-action("saveall"); } }
-                ToolBtn { icon: "關"; clicked => { menu-action("close"); } }
-                Rectangle { width: 8px; }
-                ToolBtn { icon: "剪"; clicked => { do-cut(); } }
-                ToolBtn { icon: "複"; clicked => { do-copy(); } }
-                ToolBtn { icon: "貼"; clicked => { do-paste(); } }
-                Rectangle { width: 8px; }
-                ToolBtn { icon: "↶"; clicked => { menu-action("undo"); } }
-                ToolBtn { icon: "↷"; clicked => { menu-action("redo"); } }
-                Rectangle { width: 8px; }
-                ToolBtn { icon: "找"; clicked => { menu-action("find"); } }
-                ToolBtn { icon: "換"; clicked => { menu-action("replace"); } }
-                Rectangle { width: 8px; }
-                ToolBtn { icon: "大"; clicked => { menu-action("zoomin"); } }
-                ToolBtn { icon: "小"; clicked => { menu-action("zoomout"); } }
-                Rectangle { width: 8px; }
-                ToolBtn { icon: "折"; clicked => { menu-action("wrap"); } }
-                ToolBtn { icon: "#"; clicked => { menu-action("linenumbers"); } }
-                ToolBtn { icon: "覽"; clicked => { menu-action("preview"); } }
+                ToolBtn { icon: @image-url("icons/new.svg"); tip: "開新檔案 (Ctrl+N)"; clicked => { menu-action("new"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/open.svg"); tip: "開啟舊檔 (Ctrl+O)"; clicked => { menu-action("open"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/save.svg"); tip: "儲存檔案 (Ctrl+S)"; clicked => { menu-action("save"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/saveall.svg"); tip: "全部儲存"; clicked => { menu-action("saveall"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/close.svg"); tip: "關閉 (Ctrl+W)"; clicked => { menu-action("close"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/closeall.svg"); tip: "全部關閉"; clicked => { menu-action("closeall"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/print.svg"); tip: "列印 (未實作)"; clicked => { menu-action("print"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                Sep {}
+                ToolBtn { icon: @image-url("icons/cut.svg"); tip: "剪下 (Ctrl+X)"; clicked => { do-cut(); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/copy.svg"); tip: "複製 (Ctrl+C)"; clicked => { do-copy(); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/paste.svg"); tip: "貼上 (Ctrl+V)"; clicked => { do-paste(); } hover(t, x, h) => { show-tip(t, x, h); } }
+                Sep {}
+                ToolBtn { icon: @image-url("icons/undo.svg"); tip: "復原 (Ctrl+Z)"; clicked => { menu-action("undo"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/redo.svg"); tip: "取消復原 (Ctrl+Y)"; clicked => { menu-action("redo"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                Sep {}
+                ToolBtn { icon: @image-url("icons/find.svg"); tip: "尋找 (Ctrl+F)"; clicked => { menu-action("find"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/replace.svg"); tip: "取代 (Ctrl+H)"; clicked => { menu-action("replace"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                Sep {}
+                ToolBtn { icon: @image-url("icons/zoomin.svg"); tip: "放大 (Ctrl++)"; clicked => { menu-action("zoomin"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/zoomout.svg"); tip: "縮小 (Ctrl+-)"; clicked => { menu-action("zoomout"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                Sep {}
+                ToolBtn { icon: @image-url("icons/wrap.svg"); tip: "自動換行"; clicked => { menu-action("wrap"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/linenumbers.svg"); tip: "顯示行號"; clicked => { menu-action("linenumbers"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/selectall.svg"); tip: "全選 (Ctrl+A)"; clicked => { do-select-all(); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/preview.svg"); tip: "HTML / Markdown 預覽"; clicked => { menu-action("preview"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 Rectangle {}
             }
         }
@@ -279,6 +290,11 @@ export component AppWindow inherits Window {
     }
     }
 
+    if tip-on && open-menu < 0: Rectangle {
+        x: min(tip-x, root.width - tipt.preferred-width - 12px); y: 54px; width: tipt.preferred-width + 10px; height: 20px;
+        background: #ffffe1; border-color: #767676; border-width: 1px;
+        tipt := Text { text: tip-text; font-size: 12px; vertical-alignment: center; horizontal-alignment: center; }
+    }
     // ---- open menu dropdown ----
     if open-menu >= 0: TouchArea { clicked => { open-menu = -1; } }
     if open-menu >= 0: Rectangle {
@@ -342,10 +358,10 @@ export component AppWindow inherits Window {
     }
 
     if about-visible: Dialog {
-        title: "關於 Slint Notepad"; x: (parent.width - 360px) / 2; y: 150px; width: 360px; height: 160px;
+        title: "關於 NotEdit"; x: (parent.width - 360px) / 2; y: 150px; width: 360px; height: 160px;
         close => { about-visible = false; }
         VerticalLayout { padding: 14px; spacing: 6px;
-            Text { text: "Slint Notepad 0.1.0"; font-size: 18px; font-weight: 700; }
+            Text { text: "NotEdit 0.1.0"; font-size: 18px; font-weight: 700; }
             Text { text: "以 Rust + Slint 製作的類 Notepad++ 文字編輯器"; }
             Text { text: "支援 HTML / Markdown 預覽"; }
             Button { text: "確定"; clicked => { about-visible = false; } }

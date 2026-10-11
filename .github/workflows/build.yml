@@ -14,14 +14,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: slint-notepad-windows-x64
-            bin: slint-notepad.exe
+            artifact: notedit-windows-x64
+            bin: notedit.exe
           - os: ubuntu-latest
-            artifact: slint-notepad-linux-x64
-            bin: slint-notepad
+            artifact: notedit-linux-x64
+            bin: notedit
           - os: macos-latest
-            artifact: slint-notepad-macos-arm64
-            bin: slint-notepad
+            artifact: notedit-macos-arm64
+            bin: notedit
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
