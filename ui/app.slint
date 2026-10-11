@@ -1,0 +1,333 @@
+import { Button, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+
+export struct MenuItem { label: string, shortcut: string, action: string, separator: bool, checked: bool }
+export struct Menu { title: string, items: [MenuItem] }
+export struct TabInfo { title: string, modified: bool }
+export struct Block { text: string, kind: int, indent: int, bold: bool, italic: bool, code: bool, link: bool }
+
+component ToolBtn inherits Rectangle {
+    in property <string> icon; in property <string> tip;
+    callback clicked;
+    width: 26px; height: 24px; border-radius: 3px;
+    background: ta.has-hover ? #cce4f7 : transparent;
+    border-width: ta.has-hover ? 1px : 0; border-color: #99c9ef;
+    Text { text: icon; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; color: #333; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+component Dialog inherits Rectangle {
+    in property <string> title;
+    callback close;
+    background: #f0f0f0; border-color: #888; border-width: 1px; drop-shadow-blur: 8px; drop-shadow-color: #0006;
+    VerticalLayout {
+        Rectangle { height: 26px; background: #dde6f2;
+            HorizontalLayout { padding-left: 8px; padding-right: 4px;
+                Text { text: title; vertical-alignment: center; font-weight: 700; }
+                Rectangle { width: 22px; Text { text: "✕"; vertical-alignment: center; horizontal-alignment: center; }
+                    TouchArea { clicked => { root.close(); } } }
+            }
+        }
+        @children
+    }
+}
+
+export component AppWindow inherits Window {
+    title: window-title;
+    preferred-width: 1100px; preferred-height: 720px;
+    icon: @image-url("icon.png");
+    default-font-size: 13px;
+
+    in property <string> window-title: "Slint Notepad";
+    in property <[Menu]> menus;
+    in property <[TabInfo]> tabs;
+    in-out property <int> current-tab: 0;
+    in-out property <string> editor-text;
+    in property <string> line-numbers: "1";
+    in property <bool> show-line-numbers: true;
+    in property <bool> word-wrap: false;
+    in property <length> editor-font-size: 14px;
+    in property <bool> show-preview: false;
+    in property <[Block]> preview-blocks;
+    in property <string> preview-title;
+    in property <string> st-type: "Normal text file";
+    in property <string> st-length;
+    in property <string> st-pos;
+    in property <string> st-eol: "Windows (CR LF)";
+    in property <string> st-encoding: "UTF-8";
+    in property <bool> overwrite: false;
+    in-out property <bool> find-visible: false;
+    in-out property <bool> replace-mode: false;
+    in-out property <bool> goto-visible: false;
+    in-out property <bool> about-visible: false;
+    in property <string> find-status;
+    in-out property <string> find-text;
+    in-out property <string> replace-text;
+    in-out property <bool> match-case: false;
+    in property <int> total-lines: 1;
+    out property <int> cursor-byte: ti.cursor-position_byte-offset;
+    out property <int> anchor-byte: ti.anchor-position-byte-offset;
+
+    callback menu-action(string);
+    callback text-edited(string);
+    callback cursor-moved(int);
+    callback tab-selected(int);
+    callback tab-close(int);
+    callback find-next(bool);
+    callback replace-one();
+    callback replace-all();
+    callback goto-line(string);
+    callback count-matches();
+    callback link-clicked(string);
+
+    public function select-range(s: int, e: int) { ti.set-selection-offsets(s, e); ti.focus(); }
+    public function focus-editor() { ti.focus(); }
+    public function do-cut() { ti.cut(); }
+    public function do-copy() { ti.copy(); }
+    public function do-paste() { ti.paste(); }
+    public function do-select-all() { ti.select-all(); }
+    public function scroll-top() { flick.viewport-y = 0; flick.viewport-x = 0; }
+
+    property <int> open-menu: -1;
+
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.modifiers.control) {
+                if (e.text == "s" && e.modifiers.shift) { menu-action("saveas"); return accept; }
+                if (e.text == "s") { menu-action("save"); return accept; }
+                if (e.text == "o") { menu-action("open"); return accept; }
+                if (e.text == "n") { menu-action("new"); return accept; }
+                if (e.text == "w") { menu-action("close"); return accept; }
+                if (e.text == "f") { menu-action("find"); return accept; }
+                if (e.text == "h") { menu-action("replace"); return accept; }
+                if (e.text == "g") { menu-action("goto"); return accept; }
+                if (e.text == "z") { menu-action("undo"); return accept; }
+                if (e.text == "y") { menu-action("redo"); return accept; }
+                if (e.text == "d") { menu-action("dupline"); return accept; }
+                if (e.text == "+" || e.text == "=") { menu-action("zoomin"); return accept; }
+                if (e.text == "-") { menu-action("zoomout"); return accept; }
+                if (e.text == "0") { menu-action("zoomreset"); return accept; }
+                if (e.text == Key.Tab) { menu-action("nexttab"); return accept; }
+            }
+            if (e.text == Key.F3) { find-next(!e.modifiers.shift); return accept; }
+            if (e.text == Key.Insert) { menu-action("toggleovr"); return accept; }
+            if (e.text == Key.Escape) { find-visible = false; goto-visible = false; about-visible = false; open-menu = -1; ti.focus(); return accept; }
+            reject
+        }
+
+    VerticalLayout {
+        // ---- menu bar ----
+        Rectangle { height: 22px; background: #f5f6f7;
+            HorizontalLayout { padding-left: 2px;
+                for m[i] in menus: Rectangle {
+                    width: mt.preferred-width + 14px;
+                    background: open-menu == i ? #cce4f7 : mta.has-hover ? #e5f1fb : transparent;
+                    mt := Text { text: m.title; vertical-alignment: center; horizontal-alignment: center; }
+                    mta := TouchArea {
+                        clicked => { open-menu = open-menu == i ? -1 : i; }
+                        moved => { }
+                    }
+                }
+                Rectangle {}
+            }
+        }
+        // ---- toolbar ----
+        Rectangle { height: 30px; background: #f0f0f0; border-color: #ddd; border-width: 0;
+            HorizontalLayout { padding: 3px; spacing: 1px;
+                ToolBtn { icon: "新"; clicked => { menu-action("new"); } }
+                ToolBtn { icon: "開"; clicked => { menu-action("open"); } }
+                ToolBtn { icon: "存"; clicked => { menu-action("save"); } }
+                ToolBtn { icon: "全"; clicked => { menu-action("saveall"); } }
+                ToolBtn { icon: "關"; clicked => { menu-action("close"); } }
+                Rectangle { width: 8px; }
+                ToolBtn { icon: "剪"; clicked => { do-cut(); } }
+                ToolBtn { icon: "複"; clicked => { do-copy(); } }
+                ToolBtn { icon: "貼"; clicked => { do-paste(); } }
+                Rectangle { width: 8px; }
+                ToolBtn { icon: "↶"; clicked => { menu-action("undo"); } }
+                ToolBtn { icon: "↷"; clicked => { menu-action("redo"); } }
+                Rectangle { width: 8px; }
+                ToolBtn { icon: "找"; clicked => { menu-action("find"); } }
+                ToolBtn { icon: "換"; clicked => { menu-action("replace"); } }
+                Rectangle { width: 8px; }
+                ToolBtn { icon: "大"; clicked => { menu-action("zoomin"); } }
+                ToolBtn { icon: "小"; clicked => { menu-action("zoomout"); } }
+                Rectangle { width: 8px; }
+                ToolBtn { icon: "折"; clicked => { menu-action("wrap"); } }
+                ToolBtn { icon: "#"; clicked => { menu-action("linenumbers"); } }
+                ToolBtn { icon: "覽"; clicked => { menu-action("preview"); } }
+                Rectangle {}
+            }
+        }
+        // ---- tabs ----
+        Rectangle { height: 26px; background: #e8e8e8;
+            HorizontalLayout { padding-left: 2px; spacing: 1px; alignment: start;
+                for t[i] in tabs: Rectangle {
+                    width: tt.preferred-width + 44px;
+                    background: i == current-tab ? #ffffff : tta.has-hover ? #f4f4f4 : #dcdcdc;
+                    border-width: 1px; border-color: #bbb;
+                    Rectangle { y: 0; height: 3px; background: i == current-tab ? #f7a535 : transparent; }
+                    tta := TouchArea { clicked => { tab-selected(i); } }
+                    HorizontalLayout { padding-left: 6px; padding-right: 4px; spacing: 4px;
+                        Text { text: t.modified ? "●" : "○"; color: t.modified ? #d32 : #3a3; vertical-alignment: center; }
+                        tt := Text { text: t.title; vertical-alignment: center; font-weight: i == current-tab ? 700 : 400; }
+                        Rectangle { width: 16px;
+                            Text { text: "✕"; vertical-alignment: center; horizontal-alignment: center; color: xa.has-hover ? #d00 : #777; }
+                            xa := TouchArea { clicked => { tab-close(i); } } }
+                    }
+                }
+            }
+        }
+        // ---- editor + preview ----
+        HorizontalLayout {
+            Rectangle { background: white; horizontal-stretch: 1;
+                flick := Flickable {
+                    viewport-height: max(ti.preferred-height + 40px, self.height);
+                    viewport-width: word-wrap ? self.width : max(ti.preferred-width + gutter.width + 40px, self.width);
+                    gutter := Rectangle {
+                        x: 0; y: 0; width: show-line-numbers ? ln.preferred-width + 16px : 4px;
+                        height: parent.viewport-height; background: #e4e4e4;
+                        ln := Text { visible: show-line-numbers; x: 6px; y: 2px; text: line-numbers;
+                            font-family: "monospace"; font-size: editor-font-size; color: #808080; horizontal-alignment: right; }
+                    }
+                    ti := TextInput {
+                        x: gutter.width + 4px; y: 2px;
+                        width: word-wrap ? flick.width - gutter.width - 12px : max(self.preferred-width, flick.width - gutter.width - 12px);
+                        single-line: false;
+                        wrap: word-wrap ? TextWrap.word-wrap : TextWrap.no-wrap;
+                        font-family: "monospace"; font-size: editor-font-size;
+                        text <=> editor-text;
+                        selection-background-color: #c0d8f0; selection-foreground-color: #000;
+                        edited => { text-edited(self.text); cursor-moved(self.cursor-position_byte-offset); }
+                        cursor-position-changed(p) => {
+                            cursor-moved(self.cursor-position_byte-offset);
+                            if (p.y + flick.viewport-y < 0) { flick.viewport-y = -p.y + 4px; }
+                            if (p.y + flick.viewport-y > flick.height - editor-font-size * 2) { flick.viewport-y = -(p.y - flick.height + editor-font-size * 2); }
+                            if (!word-wrap) {
+                                if (p.x + gutter.width + flick.viewport-x < gutter.width) { flick.viewport-x = min(0, -p.x + 20px); }
+                                if (p.x + gutter.width + flick.viewport-x > flick.width - 30px) { flick.viewport-x = -(p.x + gutter.width - flick.width + 60px); }
+                            }
+                        }
+                    }
+                }
+            }
+            if show-preview: Rectangle { width: 1px; background: #aaa; }
+            if show-preview: Rectangle { horizontal-stretch: 1; background: #fbfbfb;
+                VerticalLayout {
+                    Rectangle { height: 22px; background: #e9eef5;
+                        Text { x: 6px; text: "預覽：" + preview-title; vertical-alignment: center; font-weight: 700; } }
+                    ScrollView {
+                        VerticalLayout { padding: 12px; spacing: 6px; alignment: start;
+                            for b in preview-blocks: Rectangle {
+                                background: b.kind == 10 ? #f0f0f0 : b.kind == 12 ? #f5f5f5 : transparent;
+                                border-width: b.kind == 10 ? 1px : 0; border-color: #ddd;
+                                HorizontalLayout { padding-left: b.indent * 18px + (b.kind == 10 ? 8px : 0) + (b.kind == 12 ? 14px : 0); padding-top: b.kind == 10 ? 6px : 0; padding-bottom: b.kind == 10 ? 6px : 0;
+                                    if b.kind == 12: Rectangle { width: 3px; background: #bbb; }
+                                    if b.kind == 11: Rectangle { height: 1px; background: #ccc; }
+                                    if b.kind != 11: Text {
+                                        text: b.text; wrap: b.kind == 10 ? TextWrap.no-wrap : TextWrap.word-wrap;
+                                        font-size: b.kind == 1 ? 26px : b.kind == 2 ? 21px : b.kind == 3 ? 18px : b.kind >= 4 && b.kind <= 6 ? 15px : 14px;
+                                        font-weight: (b.kind >= 1 && b.kind <= 6) || b.bold ? 700 : 400;
+                                        font-italic: b.italic;
+                                        font-family: b.kind == 10 || b.code ? "monospace" : "";
+                                        color: b.link ? #0645ad : b.kind == 12 ? #555 : #222;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // ---- status bar ----
+        Rectangle { height: 22px; background: #f0f0f0; border-color: #ccc; border-width: 1px;
+            HorizontalLayout { padding-left: 6px; padding-right: 6px; spacing: 0;
+                Text { text: st-type; vertical-alignment: center; horizontal-stretch: 1; }
+                Rectangle { width: 1px; background: #ccc; }
+                Text { text: st-length; vertical-alignment: center; width: 230px; horizontal-alignment: center; }
+                Rectangle { width: 1px; background: #ccc; }
+                Text { text: st-pos; vertical-alignment: center; width: 260px; horizontal-alignment: center; }
+                Rectangle { width: 1px; background: #ccc; }
+                Text { text: st-eol; vertical-alignment: center; width: 120px; horizontal-alignment: center; }
+                Rectangle { width: 1px; background: #ccc; }
+                Text { text: st-encoding; vertical-alignment: center; width: 110px; horizontal-alignment: center; }
+                Rectangle { width: 1px; background: #ccc; }
+                Text { text: overwrite ? "OVR" : "INS"; vertical-alignment: center; width: 40px; horizontal-alignment: center; }
+            }
+        }
+    }
+    }
+
+    // ---- open menu dropdown ----
+    if open-menu >= 0: TouchArea { clicked => { open-menu = -1; } }
+    if open-menu >= 0: Rectangle {
+        x: menu-x(open-menu); y: 22px; width: 270px;
+        height: dd.preferred-height;
+        background: #f9f9f9; border-color: #999; border-width: 1px; drop-shadow-blur: 6px; drop-shadow-color: #0005;
+        dd := VerticalLayout { padding: 2px;
+            for it in menus[open-menu].items: Rectangle {
+                height: it.separator ? 7px : 22px;
+                background: !it.separator && ia.has-hover ? #cce4f7 : transparent;
+                if it.separator: Rectangle { y: 3px; height: 1px; background: #ccc; }
+                if !it.separator: HorizontalLayout { padding-left: 4px; padding-right: 10px;
+                    Text { width: 20px; text: it.checked ? "✓" : ""; vertical-alignment: center; }
+                    Text { text: it.label; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: it.shortcut; vertical-alignment: center; color: #666; }
+                }
+                ia := TouchArea { enabled: !it.separator; clicked => { open-menu = -1; menu-action(it.action); } }
+            }
+        }
+    }
+
+    // approximate x of each menu title (CJK title widths)
+    pure function menu-x(i: int) -> length { i * 32px + 2px }
+
+    // ---- find / replace ----
+    if find-visible: Dialog {
+        title: replace-mode ? "取代" : "尋找"; x: parent.width - 470px; y: 90px; width: 450px; height: replace-mode ? 210px : 170px;
+        close => { find-visible = false; }
+        VerticalLayout { padding: 10px; spacing: 6px;
+            HorizontalLayout { spacing: 6px;
+                Text { text: "尋找目標："; width: 70px; vertical-alignment: center; }
+                fe := LineEdit { text <=> find-text; accepted => { find-next(true); } }
+            }
+            if replace-mode: HorizontalLayout { spacing: 6px;
+                Text { text: "取代為："; width: 70px; vertical-alignment: center; }
+                LineEdit { text <=> replace-text; }
+            }
+            HorizontalLayout { spacing: 6px;
+                CheckBox { text: "大小寫須相符"; checked <=> match-case; }
+                CheckBox { text: "取代模式"; checked <=> replace-mode; }
+            }
+            HorizontalLayout { spacing: 4px;
+                Button { text: "找下一個"; clicked => { find-next(true); } }
+                Button { text: "找上一個"; clicked => { find-next(false); } }
+                Button { text: "計數"; clicked => { count-matches(); } }
+                if replace-mode: Button { text: "取代"; clicked => { replace-one(); } }
+                if replace-mode: Button { text: "全部取代"; clicked => { replace-all(); } }
+            }
+            Text { text: find-status; color: #a33; }
+        }
+    }
+
+    if goto-visible: Dialog {
+        title: "跳至..."; x: (parent.width - 320px) / 2; y: 120px; width: 320px; height: 130px;
+        close => { goto-visible = false; }
+        VerticalLayout { padding: 10px; spacing: 8px;
+            Text { text: "行號 (1 - " + total-lines + ")："; }
+            ge := LineEdit { accepted(t) => { goto-line(t); } }
+            Button { text: "跳至"; clicked => { goto-line(ge.text); } }
+        }
+    }
+
+    if about-visible: Dialog {
+        title: "關於 Slint Notepad"; x: (parent.width - 360px) / 2; y: 150px; width: 360px; height: 160px;
+        close => { about-visible = false; }
+        VerticalLayout { padding: 14px; spacing: 6px;
+            Text { text: "Slint Notepad 0.1.0"; font-size: 18px; font-weight: 700; }
+            Text { text: "以 Rust + Slint 製作的類 Notepad++ 文字編輯器"; }
+            Text { text: "支援 HTML / Markdown 預覽"; }
+            Button { text: "確定"; clicked => { about-visible = false; } }
+        }
+    }
+}
