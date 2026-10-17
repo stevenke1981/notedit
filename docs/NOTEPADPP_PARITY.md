@@ -28,9 +28,9 @@ Already implemented in NotEdit v0.2.1:
 |---|---|---|---|
 | P0 | Durable saves | Implemented (#1) | Never truncate the destination before a complete staged write; preserve existing permissions; tests cover create/replace |
 | P0 | Crash/session recovery | Implemented (#3) | Recover modified named and unnamed buffers after abnormal exit without overwriting source files |
-| P0 | External file-change detection | Implemented (#4) |
-| P0 | Lossless legacy-encoding saves | In review (#6) | Refuse writes that would replace unrepresentable characters; regression tests cover legacy and Unicode encodings | Detect changed/deleted files and offer reload/keep choices |
-| P0 | Large-file behavior | Partial | Open/edit/search large text files without copying the entire document on every keystroke |
+| P0 | External file-change detection | Implemented (#4) | Detect changed/deleted files, offer reload/keep choices, and surface recovery-vs-disk conflicts |
+| P0 | Lossless legacy-encoding saves | Implemented (#6) | Refuse writes that would replace unrepresentable characters; regression tests cover legacy and Unicode encodings |
+| P0 | Large-file behavior | Partial (#5, #7) | Slint 1.18.1 plus bounded undo memory and fewer full-document status/line-number rescans; deeper full-text edit-model work remains |
 | P1 | Find in Files | Missing | Folder scope, filters, regex, recursive mode, result panel, click-to-open |
 | P1 | Folder as Workspace | Missing | Tree panel, refresh, open/rename/create/delete with safe confirmation |
 | P1 | Function List | Missing | Language-aware symbol extraction, filter, click-to-navigate |
