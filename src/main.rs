@@ -122,20 +122,26 @@ fn decode(bytes: &[u8]) -> (String, &'static encoding_rs::Encoding, bool) {
     (s.into_owned(), enc, false)
 }
 
-fn encode(doc: &Doc) -> Vec<u8> {
+fn encode(doc: &Doc) -> Result<Vec<u8>, String> {
     let text = doc.text.replace('\n', doc.eol.seq());
     let name = doc.encoding.name();
     if name == "UTF-16LE" || name == "UTF-16BE" {
         let le = name == "UTF-16LE";
         let mut v = if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
         for u in text.encode_utf16() { v.extend_from_slice(&if le { u.to_le_bytes() } else { u.to_be_bytes() }); }
-        return v;
+        return Ok(v);
     }
     let mut v = Vec::new();
     if doc.bom && name == "UTF-8" { v.extend_from_slice(&[0xEF, 0xBB, 0xBF]); }
-    let (b, _, _) = doc.encoding.encode(&text);
+    let (b, _, had_errors) = doc.encoding.encode(&text);
+    if had_errors {
+        return Err(format!(
+            "目前的 {} 編碼無法表示文件中的部分字元。\n\n為避免資料遺失，本次沒有寫入檔案。請先將編碼改為 UTF-8 或 UTF-8-BOM，再重新儲存。",
+            doc.encoding_label()
+        ));
+    }
     v.extend_from_slice(&b);
-    v
+    Ok(v)
 }
 
 fn detect_eol(s: &str) -> Eol {
@@ -615,7 +621,10 @@ impl App {
             }
         };
         let Some(path) = path else { return false };
-        let bytes = encode(&self.st.borrow().docs[idx]);
+        let bytes = match encode(&self.st.borrow().docs[idx]) {
+            Ok(bytes) => bytes,
+            Err(e) => { msg(&e); return false; }
+        };
         if let Err(e) = file_io::durable_write(&path, &bytes) { msg(&format!("儲存失敗：{}", e)); return false; }
         {
             let mut st = self.st.borrow_mut();
@@ -1164,6 +1173,37 @@ mod tests {
         let h = toggle_comment_lines("  <p>x</p>", "<!-- ", " -->");
         assert_eq!(h, "  <!-- <p>x</p> -->");
         assert_eq!(toggle_comment_lines(&h, "<!-- ", " -->"), "  <p>x</p>");
+    }
+
+    #[test]
+    fn legacy_encoding_rejects_unrepresentable_text() {
+        let mut d = Doc::new(0);
+        d.encoding = encoding_rs::BIG5;
+        d.text = "繁體中文".into();
+        assert!(encode(&d).is_ok());
+
+        d.text = "繁體中文 😀".into();
+        let err = encode(&d).unwrap_err();
+        assert!(err.contains("Big5"));
+    }
+
+    #[test]
+    fn utf8_and_utf16_are_lossless() {
+        for encoding in [encoding_rs::UTF_8, encoding_rs::UTF_16LE, encoding_rs::UTF_16BE] {
+            let mut d = Doc::new(0);
+            d.encoding = encoding;
+            d.text = "中文\n日本語\nemoji 😀".into();
+            assert!(encode(&d).is_ok(), "{}", encoding.name());
+        }
+    }
+
+    #[test]
+    fn encoding_respects_selected_eol() {
+        let mut d = Doc::new(0);
+        d.encoding = encoding_rs::UTF_8;
+        d.eol = Eol::Crlf;
+        d.text = "a\nb".into();
+        assert_eq!(encode(&d).unwrap(), b"a\r\nb");
     }
 }
 
