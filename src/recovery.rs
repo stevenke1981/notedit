@@ -21,6 +21,10 @@ pub struct RecoveryDoc {
     pub bom: bool,
     pub lang: String,
     pub cursor: usize,
+    /// On-disk state when this recovery snapshot was captured. Optional so
+    /// journals produced by NotEdit v0.2.x before file watching remain readable.
+    pub disk_len: Option<u64>,
+    pub disk_modified_ns: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +100,8 @@ mod tests {
             bom: false,
             lang: "text".into(),
             cursor: 7,
+            disk_len: Some(12),
+            disk_modified_ns: Some(123_456_789),
         }])
     }
 
@@ -116,4 +122,29 @@ mod tests {
         assert_eq!(load(&dir).unwrap(), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn loads_older_journal_without_disk_stamp_fields() {
+        let dir = temp_dir();
+        let json = r#"{
+          "version": 1,
+          "docs": [{
+            "path": "/tmp/example.txt",
+            "title": "example.txt",
+            "text": "old journal",
+            "eol": "lf",
+            "encoding": "UTF-8",
+            "bom": false,
+            "lang": "text",
+            "cursor": 3
+          }]
+        }"#;
+        std::fs::write(dir.join(RECOVERY_FILE), json).unwrap();
+        let loaded = load(&dir).unwrap().unwrap();
+        assert_eq!(loaded.docs.len(), 1);
+        assert_eq!(loaded.docs[0].disk_len, None);
+        assert_eq!(loaded.docs[0].disk_modified_ns, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }
