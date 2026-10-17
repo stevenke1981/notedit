@@ -23,6 +23,36 @@ impl Eol {
     fn seq(self) -> &'static str { match self { Eol::Crlf => "\r\n", Eol::Lf => "\n", Eol::Cr => "\r" } }
 }
 
+const HISTORY_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+const HISTORY_MAX_ENTRIES: usize = 300;
+
+fn history_push_limited(
+    stack: &mut Vec<String>,
+    bytes: &mut usize,
+    value: String,
+    budget: usize,
+    max_entries: usize,
+) {
+    let size = value.len();
+    if size > budget {
+        stack.clear();
+        *bytes = 0;
+        stack.push(value);
+        *bytes = size;
+        return;
+    }
+    stack.push(value);
+    *bytes = (*bytes).saturating_add(size);
+    while stack.len() > 1 && (*bytes > budget || stack.len() > max_entries) {
+        let removed = stack.remove(0);
+        *bytes = (*bytes).saturating_sub(removed.len());
+    }
+}
+
+fn history_push(stack: &mut Vec<String>, bytes: &mut usize, value: String) {
+    history_push_limited(stack, bytes, value, HISTORY_BUDGET_BYTES, HISTORY_MAX_ENTRIES);
+}
+
 struct Doc {
     path: Option<PathBuf>,
     title: String,
@@ -34,6 +64,8 @@ struct Doc {
     lang: String,
     undo: Vec<String>,
     redo: Vec<String>,
+    undo_bytes: usize,
+    redo_bytes: usize,
     last_snap: Option<Instant>,
     hl: highlight::Hl,
     cursor: usize,
@@ -43,7 +75,7 @@ struct Doc {
 impl Doc {
     fn new(n: usize) -> Self {
         Doc { path: None, title: format!("new {}", n), text: String::new(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
-              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None, hl: Default::default(), cursor: 0, disk_stamp: None }
+              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], undo_bytes: 0, redo_bytes: 0, last_snap: None, hl: Default::default(), cursor: 0, disk_stamp: None }
     }
     fn encoding_label(&self) -> String {
         let n = self.encoding.name();
@@ -57,6 +89,44 @@ impl Doc {
             ("Shift_JIS", _) => "Shift-JIS".into(),
             (o, _) => o.to_string(),
         }
+    }
+
+    fn clear_redo(&mut self) {
+        self.redo.clear();
+        self.redo_bytes = 0;
+    }
+
+    fn clear_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.undo_bytes = 0;
+        self.redo_bytes = 0;
+        self.last_snap = None;
+    }
+
+    fn push_undo(&mut self, text: String) {
+        history_push(&mut self.undo, &mut self.undo_bytes, text);
+    }
+
+    fn push_redo(&mut self, text: String) {
+        history_push(&mut self.redo, &mut self.redo_bytes, text);
+    }
+
+    fn step_history(&mut self, undo: bool) -> bool {
+        let next = if undo {
+            let Some(next) = self.undo.pop() else { return false; };
+            self.undo_bytes = self.undo_bytes.saturating_sub(next.len());
+            next
+        } else {
+            let Some(next) = self.redo.pop() else { return false; };
+            self.redo_bytes = self.redo_bytes.saturating_sub(next.len());
+            next
+        };
+        let current = std::mem::replace(&mut self.text, next);
+        if undo { self.push_redo(current); } else { self.push_undo(current); }
+        self.modified = true;
+        self.last_snap = None;
+        true
     }
 }
 
@@ -393,9 +463,13 @@ impl App {
         ui.set_st_eol(d.eol.label().into());
         ui.set_st_encoding(d.encoding_label().into());
         let lines = d.text.matches('\n').count() + 1;
-        ui.set_total_lines(lines as i32);
-        let ln: String = (1..=lines).map(|i| i.to_string()).collect::<Vec<_>>().join("\n");
-        if ui.get_line_numbers().as_str() != ln { ui.set_line_numbers(ln.into()); }
+        let display_len = d.text.chars().count() + if d.eol == Eol::Crlf { lines - 1 } else { 0 };
+        ui.set_st_length(format!("length : {}    lines : {}", display_len, lines).into());
+        if ui.get_total_lines() != lines as i32 {
+            ui.set_total_lines(lines as i32);
+            let ln: String = (1..=lines).map(|i| i.to_string()).collect::<Vec<_>>().join("\n");
+            ui.set_line_numbers(ln.into());
+        }
     }
 
     fn refresh_status(&self, byte: usize) {
@@ -409,9 +483,6 @@ impl App {
         let line = before.matches('\n').count() + 1;
         let col = before.rsplit('\n').next().map(|s| s.chars().count()).unwrap_or(0) + 1;
         let pos = before.chars().count() + 1;
-        let lines = t.matches('\n').count() + 1;
-        let len = t.chars().count() + if d.eol == Eol::Crlf { lines - 1 } else { 0 };
-        ui.set_st_length(format!("length : {}    lines : {}", len, lines).into());
         let (a, c) = (ui.get_anchor_byte() as usize, ui.get_cursor_byte() as usize);
         let sel = if a != c && a <= t.len() && c <= t.len() {
             let (s, e) = (a.min(c), a.max(c));
@@ -507,9 +578,8 @@ impl App {
             let now = Instant::now();
             if d.last_snap.map(|t| now.duration_since(t).as_millis() > 700).unwrap_or(true) {
                 let old = std::mem::take(&mut d.text);
-                d.undo.push(old);
-                if d.undo.len() > 300 { d.undo.remove(0); }
-                d.redo.clear();
+                d.push_undo(old);
+                d.clear_redo();
             }
             d.last_snap = Some(now);
             d.text = text;
@@ -527,8 +597,8 @@ impl App {
             let d = &mut st.docs[cur];
             if d.text == text { return; }
             let old = std::mem::replace(&mut d.text, text);
-            d.undo.push(old);
-            d.redo.clear();
+            d.push_undo(old);
+            d.clear_redo();
             d.last_snap = None;
             d.modified = true;
         }
@@ -597,9 +667,7 @@ impl App {
             d.encoding = enc;
             d.bom = bom;
             d.modified = false;
-            d.undo.clear();
-            d.redo.clear();
-            d.last_snap = None;
+            d.clear_history();
             d.hl = Default::default();
             d.disk_stamp = disk_stamp;
             d.cursor = d.cursor.min(d.text.len());
@@ -793,8 +861,7 @@ impl App {
                 let ok = {
                     let mut st = self.st.borrow_mut();
                     let d = &mut st.docs[cur];
-                    let (from, to) = if a == "undo" { (&mut d.undo, &mut d.redo) } else { (&mut d.redo, &mut d.undo) };
-                    if let Some(t) = from.pop() { to.push(std::mem::replace(&mut d.text, t)); d.modified = true; d.last_snap = None; true } else { false }
+                    d.step_history(a == "undo")
                 };
                 if ok {
                     let c = ui.get_cursor_byte() as usize;
@@ -1164,6 +1231,37 @@ fn toggle_comment_lines(block: &str, pre: &str, post: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn undo_history_obeys_byte_budget() {
+        let mut stack = Vec::new();
+        let mut bytes = 0;
+        history_push_limited(&mut stack, &mut bytes, "aaaa".into(), 7, 100);
+        history_push_limited(&mut stack, &mut bytes, "bbb".into(), 7, 100);
+        history_push_limited(&mut stack, &mut bytes, "cc".into(), 7, 100);
+        assert_eq!(stack, vec!["bbb".to_string(), "cc".to_string()]);
+        assert_eq!(bytes, 5);
+    }
+
+    #[test]
+    fn undo_history_keeps_only_one_oversized_snapshot() {
+        let mut stack = vec!["old".to_string()];
+        let mut bytes = 3;
+        history_push_limited(&mut stack, &mut bytes, "0123456789".into(), 5, 100);
+        assert_eq!(stack, vec!["0123456789".to_string()]);
+        assert_eq!(bytes, 10);
+    }
+
+    #[test]
+    fn undo_history_obeys_entry_cap() {
+        let mut stack = Vec::new();
+        let mut bytes = 0;
+        for i in 0..5 {
+            history_push_limited(&mut stack, &mut bytes, i.to_string(), 100, 3);
+        }
+        assert_eq!(stack, vec!["2".to_string(), "3".to_string(), "4".to_string()]);
+        assert_eq!(bytes, 3);
+    }
+
     #[test]
     fn comments() {
         let b = "fn a() {\n    x();\n}";
