@@ -4,6 +4,7 @@ mod preview;
 mod highlight;
 mod search;
 mod settings;
+mod file_io;
 
 use i_slint_backend_winit::{WinitWindowAccessor, WinitWindowEventResult};
 
@@ -409,7 +410,7 @@ impl App {
         };
         let Some(path) = path else { return false };
         let bytes = encode(&self.st.borrow().docs[idx]);
-        if let Err(e) = std::fs::write(&path, bytes) { msg(&format!("儲存失敗：{}", e)); return false; }
+        if let Err(e) = file_io::durable_write(&path, &bytes) { msg(&format!("儲存失敗：{}", e)); return false; }
         {
             let mut st = self.st.borrow_mut();
             let d = &mut st.docs[idx];
