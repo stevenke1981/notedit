@@ -1,10 +1,9 @@
 //! Durable file writes for user documents.
 //!
 //! We never write directly into the destination path. The new contents are
-//! written and flushed to a sibling temporary file first. On Unix the final
-//! rename replaces the destination atomically. Windows does not provide the
-//! same overwrite semantics through std::fs::rename, so we use a short
-//! rename-with-rollback sequence there.
+//! written and flushed to a sibling temporary file first, then installed with
+//! std::fs::rename. The standard library replaces an existing destination and
+//! keeps the temporary file on the same mount/volume as the target.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -61,40 +60,18 @@ pub fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     staged
 }
 
-#[cfg(not(windows))]
 fn replace_destination(temp: &Path, path: &Path) -> io::Result<()> {
     fs::rename(temp, path)?;
 
     // Best-effort directory sync so the rename itself survives a sudden loss
-    // of power on filesystems that support syncing directories.
+    // of power on Unix filesystems that support syncing directories.
+    #[cfg(unix)]
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         if let Ok(dir) = File::open(parent) {
             let _ = dir.sync_all();
         }
     }
     Ok(())
-}
-
-#[cfg(windows)]
-fn replace_destination(temp: &Path, path: &Path) -> io::Result<()> {
-    if !path.exists() {
-        return fs::rename(temp, path);
-    }
-
-    let backup = sibling_temp_path(path, "swap");
-    fs::rename(path, &backup)?;
-    match fs::rename(temp, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(backup);
-            Ok(())
-        }
-        Err(e) => {
-            // Put the original file back. Keep the original error because it
-            // explains why the new document could not be installed.
-            let _ = fs::rename(&backup, path);
-            Err(e)
-        }
-    }
 }
 
 #[cfg(test)]
