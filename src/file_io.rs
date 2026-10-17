@@ -1,10 +1,9 @@
 //! Durable file writes for user documents.
 //!
 //! We never write directly into the destination path. The new contents are
-//! written and flushed to a sibling temporary file first. On Unix the final
-//! rename replaces the destination atomically. Windows does not provide the
-//! same overwrite semantics through std::fs::rename, so we use a short
-//! rename-with-rollback sequence there.
+//! written and flushed to a sibling temporary file first, then installed with
+//! std::fs::rename. The standard library replaces an existing destination and
+//! keeps the temporary file on the same mount/volume as the target.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -37,7 +36,11 @@ fn create_sibling_temp(path: &Path) -> io::Result<(PathBuf, File)> {
 /// Existing permissions are copied to the staged file when possible. The
 /// temporary file is fsync'd before it replaces the destination.
 pub fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let old_permissions = fs::metadata(path).ok().map(|m| m.permissions());
+    let old_metadata = fs::metadata(path).ok();
+    if old_metadata.as_ref().is_some_and(|m| m.permissions().readonly()) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "destination is read-only"));
+    }
+    let old_permissions = old_metadata.map(|m| m.permissions());
     let (temp, mut file) = create_sibling_temp(path)?;
 
     let staged = (|| -> io::Result<()> {
@@ -57,40 +60,18 @@ pub fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     staged
 }
 
-#[cfg(not(windows))]
 fn replace_destination(temp: &Path, path: &Path) -> io::Result<()> {
     fs::rename(temp, path)?;
 
     // Best-effort directory sync so the rename itself survives a sudden loss
-    // of power on filesystems that support syncing directories.
+    // of power on Unix filesystems that support syncing directories.
+    #[cfg(unix)]
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         if let Ok(dir) = File::open(parent) {
             let _ = dir.sync_all();
         }
     }
     Ok(())
-}
-
-#[cfg(windows)]
-fn replace_destination(temp: &Path, path: &Path) -> io::Result<()> {
-    if !path.exists() {
-        return fs::rename(temp, path);
-    }
-
-    let backup = sibling_temp_path(path, "swap");
-    fs::rename(path, &backup)?;
-    match fs::rename(temp, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(backup);
-            Ok(())
-        }
-        Err(e) => {
-            // Put the original file back. Keep the original error because it
-            // explains why the new document could not be installed.
-            let _ = fs::rename(&backup, path);
-            Err(e)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -121,6 +102,25 @@ mod tests {
         fs::write(&p, b"old").unwrap();
         durable_write(&p, b"new contents").unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"new contents");
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn refuses_read_only_destination() {
+        let d = dir();
+        let p = d.join("readonly.txt");
+        fs::write(&p, b"keep me").unwrap();
+        let mut permissions = fs::metadata(&p).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&p, permissions).unwrap();
+
+        let err = durable_write(&p, b"must not replace").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&p).unwrap(), b"keep me");
+
+        let mut permissions = fs::metadata(&p).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&p, permissions).unwrap();
         fs::remove_dir_all(d).unwrap();
     }
 }
