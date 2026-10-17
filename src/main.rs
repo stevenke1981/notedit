@@ -14,7 +14,7 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Eol { Crlf, Lf, Cr }
@@ -263,15 +263,24 @@ impl App {
 
     fn recovery_session(&self) -> recovery::RecoverySession {
         let st = self.st.borrow();
-        let docs = st.docs.iter().filter(|d| d.modified).map(|d| recovery::RecoveryDoc {
-            path: d.path.clone(),
-            title: d.title.clone(),
-            text: d.text.clone(),
-            eol: match d.eol { Eol::Crlf => "crlf", Eol::Lf => "lf", Eol::Cr => "cr" }.into(),
-            encoding: d.encoding.name().to_string(),
-            bom: d.bom,
-            lang: d.lang.clone(),
-            cursor: d.cursor,
+        let docs = st.docs.iter().filter(|d| d.modified).map(|d| {
+            let disk_len = d.disk_stamp.as_ref().map(|s| s.len);
+            let disk_modified_ns = d.disk_stamp.as_ref()
+                .and_then(|s| s.modified.as_ref())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .and_then(|d| u64::try_from(d.as_nanos()).ok());
+            recovery::RecoveryDoc {
+                path: d.path.clone(),
+                title: d.title.clone(),
+                text: d.text.clone(),
+                eol: match d.eol { Eol::Crlf => "crlf", Eol::Lf => "lf", Eol::Cr => "cr" }.into(),
+                encoding: d.encoding.name().to_string(),
+                bom: d.bom,
+                lang: d.lang.clone(),
+                cursor: d.cursor,
+                disk_len,
+                disk_modified_ns,
+            }
         }).collect();
         recovery::RecoverySession::new(docs)
     }
@@ -311,7 +320,13 @@ impl App {
             let normalized_path = rd.path.map(|p| std::fs::canonicalize(&p).unwrap_or(p));
             let mut d = Doc::new(0);
             d.path = normalized_path.clone();
-            d.disk_stamp = normalized_path.as_deref().and_then(|p| file_watch::stamp(p).ok());
+            // Keep the stamp from the moment the recovery snapshot was made.
+            // If the file changed while NotEdit was not running, the watcher
+            // will compare this old stamp with disk and surface a conflict.
+            d.disk_stamp = rd.disk_len.map(|len| file_watch::FileStamp {
+                len,
+                modified: rd.disk_modified_ns.map(|ns| UNIX_EPOCH + Duration::from_nanos(ns)),
+            });
             d.title = rd.title;
             d.text = rd.text;
             d.eol = match rd.eol.as_str() { "crlf" => Eol::Crlf, "cr" => Eol::Cr, _ => Eol::Lf };
