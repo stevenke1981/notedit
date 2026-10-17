@@ -6,6 +6,7 @@ mod search;
 mod settings;
 mod file_io;
 mod recovery;
+mod file_watch;
 
 use i_slint_backend_winit::{WinitWindowAccessor, WinitWindowEventResult};
 
@@ -13,7 +14,7 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Eol { Crlf, Lf, Cr }
@@ -36,12 +37,13 @@ struct Doc {
     last_snap: Option<Instant>,
     hl: highlight::Hl,
     cursor: usize,
+    disk_stamp: Option<file_watch::FileStamp>,
 }
 
 impl Doc {
     fn new(n: usize) -> Self {
         Doc { path: None, title: format!("new {}", n), text: String::new(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
-              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None, hl: Default::default(), cursor: 0 }
+              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), undo: vec![], redo: vec![], last_snap: None, hl: Default::default(), cursor: 0, disk_stamp: None }
     }
     fn encoding_label(&self) -> String {
         let n = self.encoding.name();
@@ -261,15 +263,24 @@ impl App {
 
     fn recovery_session(&self) -> recovery::RecoverySession {
         let st = self.st.borrow();
-        let docs = st.docs.iter().filter(|d| d.modified).map(|d| recovery::RecoveryDoc {
-            path: d.path.clone(),
-            title: d.title.clone(),
-            text: d.text.clone(),
-            eol: match d.eol { Eol::Crlf => "crlf", Eol::Lf => "lf", Eol::Cr => "cr" }.into(),
-            encoding: d.encoding.name().to_string(),
-            bom: d.bom,
-            lang: d.lang.clone(),
-            cursor: d.cursor,
+        let docs = st.docs.iter().filter(|d| d.modified).map(|d| {
+            let disk_len = d.disk_stamp.as_ref().map(|s| s.len);
+            let disk_modified_ns = d.disk_stamp.as_ref()
+                .and_then(|s| s.modified.as_ref())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .and_then(|d| u64::try_from(d.as_nanos()).ok());
+            recovery::RecoveryDoc {
+                path: d.path.clone(),
+                title: d.title.clone(),
+                text: d.text.clone(),
+                eol: match d.eol { Eol::Crlf => "crlf", Eol::Lf => "lf", Eol::Cr => "cr" }.into(),
+                encoding: d.encoding.name().to_string(),
+                bom: d.bom,
+                lang: d.lang.clone(),
+                cursor: d.cursor,
+                disk_len,
+                disk_modified_ns,
+            }
         }).collect();
         recovery::RecoverySession::new(docs)
     }
@@ -309,6 +320,13 @@ impl App {
             let normalized_path = rd.path.map(|p| std::fs::canonicalize(&p).unwrap_or(p));
             let mut d = Doc::new(0);
             d.path = normalized_path.clone();
+            // Keep the stamp from the moment the recovery snapshot was made.
+            // If the file changed while NotEdit was not running, the watcher
+            // will compare this old stamp with disk and surface a conflict.
+            d.disk_stamp = rd.disk_len.map(|len| file_watch::FileStamp {
+                len,
+                modified: rd.disk_modified_ns.map(|ns| UNIX_EPOCH + Duration::from_nanos(ns)),
+            });
             d.title = rd.title;
             d.text = rd.text;
             d.eol = match rd.eol.as_str() { "crlf" => Eol::Crlf, "cr" => Eol::Cr, _ => Eol::Lf };
@@ -400,6 +418,63 @@ impl App {
         if st.marks != marks { st.marks = marks; self.ver.set(self.ver.get() + 1); }
     }
 
+    fn check_external_changes(&self) {
+        let docs: Vec<_> = {
+            let st = self.st.borrow();
+            st.docs.iter().enumerate().filter_map(|(i, d)| {
+                d.path.clone().map(|p| (i, p, d.disk_stamp.clone(), d.modified, d.title.clone()))
+            }).collect()
+        };
+
+        for (idx, path, expected, modified, title) in docs {
+            let current = match file_watch::stamp(&path) {
+                Ok(stamp) => Some(stamp),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => continue,
+            };
+            if current == expected { continue; }
+
+            if current.is_none() {
+                msg(&format!("「{}」已被其他程式刪除。\n\nNotEdit 會保留目前記憶體中的內容並標記為未儲存。", title));
+                {
+                    let mut st = self.st.borrow_mut();
+                    if let Some(d) = st.docs.get_mut(idx).filter(|d| d.path.as_ref() == Some(&path)) {
+                        d.disk_stamp = None;
+                        d.modified = true;
+                    }
+                }
+                self.refresh_meta();
+                self.persist_recovery();
+                return;
+            }
+
+            let description = if modified {
+                format!("「{}」已被其他程式修改。\n\nNotEdit 內也有未儲存變更。是否重新載入磁碟版本？\n選「否」會保留目前內容並標記為未儲存。", title)
+            } else {
+                format!("「{}」已被其他程式修改。\n\n是否重新載入磁碟上的新版本？", title)
+            };
+            let answer = rfd::MessageDialog::new()
+                .set_title("NotEdit")
+                .set_description(description)
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show();
+            if answer == rfd::MessageDialogResult::Yes {
+                self.reload_doc(idx);
+            } else {
+                {
+                    let mut st = self.st.borrow_mut();
+                    if let Some(d) = st.docs.get_mut(idx).filter(|d| d.path.as_ref() == Some(&path)) {
+                        d.disk_stamp = current;
+                        d.modified = true;
+                    }
+                }
+                self.refresh_meta();
+                self.persist_recovery();
+            }
+            return;
+        }
+    }
+
     fn refresh_preview(&self) {
         let ui = self.ui();
         let st = self.st.borrow();
@@ -476,6 +551,7 @@ impl App {
                 let mut d = Doc::new(0);
                 d.title = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 d.lang = lang_from_path(&path);
+                d.disk_stamp = file_watch::stamp(&path).ok();
                 d.path = Some(path); d.text = text; d.eol = eol; d.encoding = enc; d.bom = bom;
                 let c = st.cur;
                 if st.docs[c].path.is_none() && !st.docs[c].modified && st.docs[c].text.is_empty() { st.docs[c] = d; }
@@ -484,6 +560,49 @@ impl App {
             }
         }
         self.refresh_all();
+    }
+
+    fn reload_doc(&self, idx: usize) -> bool {
+        let path = {
+            let st = self.st.borrow();
+            match st.docs.get(idx).and_then(|d| d.path.clone()) {
+                Some(path) => path,
+                None => return false,
+            }
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                msg(&format!("無法重新載入「{}」：{}", path.display(), e));
+                return false;
+            }
+        };
+        let (s, enc, bom) = decode(&bytes);
+        let eol = detect_eol(&s);
+        let text = s.replace("\r\n", "\n").replace('\r', "\n");
+        let disk_stamp = file_watch::stamp(&path).ok();
+        let is_current = {
+            let mut st = self.st.borrow_mut();
+            if idx >= st.docs.len() { return false; }
+            let is_current = st.cur == idx;
+            let d = &mut st.docs[idx];
+            d.text = text;
+            d.eol = eol;
+            d.encoding = enc;
+            d.bom = bom;
+            d.modified = false;
+            d.undo.clear();
+            d.redo.clear();
+            d.last_snap = None;
+            d.hl = Default::default();
+            d.disk_stamp = disk_stamp;
+            d.cursor = d.cursor.min(d.text.len());
+            while d.cursor > 0 && !d.text.is_char_boundary(d.cursor) { d.cursor -= 1; }
+            is_current
+        };
+        if is_current { self.refresh_all(); } else { self.refresh_meta(); }
+        self.persist_recovery();
+        true
     }
 
     fn save(&self, idx: usize, save_as: bool) -> bool {
@@ -504,6 +623,7 @@ impl App {
             d.title = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             if d.path.as_ref() != Some(&path) { d.lang = lang_from_path(&path); }
             d.path = Some(path.clone());
+            d.disk_stamp = file_watch::stamp(&path).ok();
             d.modified = false;
             st.cfg.add_recent(path);
         }
@@ -835,7 +955,7 @@ impl App {
                     .add_filter("所有檔案", &["*"]).add_filter("文字/程式碼", &["txt", "md", "html", "htm", "rs", "py", "js", "json", "xml", "css", "c", "cpp", "h", "toml", "ini", "log"])
                     .pick_files() { for f in files { self.open_path(f); } }
             }
-            "reload" => { if let Some(p) = self.st.borrow().docs[cur].path.clone() { self.st.borrow_mut().docs[cur].modified = false; let mut st = self.st.borrow_mut(); let d = st.docs.remove(cur); st.docs.insert(cur, Doc { path: None, ..d }); drop(st); self.st.borrow_mut().docs[cur].path = Some(p.clone()); if let Ok(b) = std::fs::read(&p) { let (s, enc, bom) = decode(&b); let mut st = self.st.borrow_mut(); let d = &mut st.docs[cur]; d.eol = detect_eol(&s); d.text = s.replace("\r\n", "\n").replace('\r', "\n"); d.encoding = enc; d.bom = bom; } self.refresh_all(); } }
+            "reload" => { self.reload_doc(cur); }
             "save" => { self.save(cur, false); }
             "saveas" => { self.save(cur, true); }
             "saveall" => { let n = self.st.borrow().docs.len(); for i in 0..n { if self.st.borrow().docs[i].modified { self.save(i, false); } } }
@@ -1160,6 +1280,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let ar = app.clone();
     let recovery_timer = slint::Timer::default();
     recovery_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || ar.persist_recovery());
+
+    let aw = app.clone();
+    let file_watch_timer = slint::Timer::default();
+    file_watch_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(2), move || aw.check_external_changes());
 
     let a2 = app.clone();
     ui.window().on_close_requested(move || if a2.confirm_exit() { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown });
