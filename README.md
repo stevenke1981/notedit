@@ -47,6 +47,12 @@ Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-d
 
 推送 `v*` 標籤時，GitHub Actions 會自動建置 Windows / Linux / macOS 並發佈到 Releases。
 
+## 開發路線
+
+NotEdit 會以目前 Notepad++ 的實際能力作為功能對照，而不是只追舊版介面。完整差距、優先級與驗收條件請見 **[Notepad++ parity roadmap](docs/NOTEPADPP_PARITY.md)**。
+
+目前可靠性主線已開始處理「安全儲存」：文件與設定會先寫入同目錄暫存檔並同步到磁碟，再替換目標，避免直接截斷原檔後才開始寫入。
+
 ## 已知限制（相較 Notepad++）
 
 - 自動換行模式下改為單色顯示且隱藏行號（語法上色與行號僅在不換行時提供）

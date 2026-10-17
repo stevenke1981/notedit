@@ -42,10 +42,11 @@ impl Settings {
     pub fn load() -> Self {
         std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
-    pub fn save(&self) {
+    pub fn save(&self) -> std::io::Result<()> {
         let f = file();
-        if let Some(d) = f.parent() { let _ = std::fs::create_dir_all(d); }
-        if let Ok(s) = serde_json::to_string_pretty(self) { let _ = std::fs::write(f, s); }
+        if let Some(d) = f.parent() { std::fs::create_dir_all(d)?; }
+        let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
+        crate::file_io::durable_write(&f, &json)
     }
     pub fn add_recent(&mut self, p: PathBuf) {
         self.recent.retain(|x| x != &p);
