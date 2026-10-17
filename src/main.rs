@@ -253,7 +253,9 @@ impl App {
         st.cfg.macro_keys = st.macro_buf.clone();
         st.cfg.session = st.docs.iter().filter_map(|d| d.path.clone().map(|p| settings::SessionFile { path: p, cursor: d.cursor })).collect();
         st.cfg.session_cur = st.docs[..st.cur].iter().filter(|d| d.path.is_some()).count();
-        st.cfg.save();
+        if let Err(e) = st.cfg.save() {
+            eprintln!("NotEdit: failed to save settings: {e}");
+        }
     }
 
     fn refresh_meta(&self) {
