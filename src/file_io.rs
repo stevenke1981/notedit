@@ -37,7 +37,11 @@ fn create_sibling_temp(path: &Path) -> io::Result<(PathBuf, File)> {
 /// Existing permissions are copied to the staged file when possible. The
 /// temporary file is fsync'd before it replaces the destination.
 pub fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let old_permissions = fs::metadata(path).ok().map(|m| m.permissions());
+    let old_metadata = fs::metadata(path).ok();
+    if old_metadata.as_ref().is_some_and(|m| m.permissions().readonly()) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "destination is read-only"));
+    }
+    let old_permissions = old_metadata.map(|m| m.permissions());
     let (temp, mut file) = create_sibling_temp(path)?;
 
     let staged = (|| -> io::Result<()> {
@@ -121,6 +125,25 @@ mod tests {
         fs::write(&p, b"old").unwrap();
         durable_write(&p, b"new contents").unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"new contents");
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn refuses_read_only_destination() {
+        let d = dir();
+        let p = d.join("readonly.txt");
+        fs::write(&p, b"keep me").unwrap();
+        let mut permissions = fs::metadata(&p).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&p, permissions).unwrap();
+
+        let err = durable_write(&p, b"must not replace").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&p).unwrap(), b"keep me");
+
+        let mut permissions = fs::metadata(&p).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&p, permissions).unwrap();
         fs::remove_dir_all(d).unwrap();
     }
 }
