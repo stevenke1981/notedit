@@ -8,7 +8,7 @@ mod file_io;
 mod recovery;
 mod file_watch;
 
-use i_slint_backend_winit::{WinitWindowAccessor, WinitWindowEventResult};
+use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -1267,7 +1267,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     for f in files { if f.is_file() { a.open_path(f); } }
                 });
             }
-            WinitWindowEventResult::Propagate
+            EventResult::Propagate
         });
     }
 
