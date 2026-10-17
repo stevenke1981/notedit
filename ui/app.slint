@@ -107,7 +107,7 @@ export component AppWindow inherits Window {
     property <int> drag-from: -1;
     property <int> drop-target: -1;
     property <length> drag-abs-x;
-    out property <length> scroll-y: -flick.viewport-y;
+    out property <length> scroll-y: -flick.content-y;
     out property <length> view-h: flick.height;
     out property <length> line-h: metric.preferred-height;
     in property <string> mono: "JetBrains Mono";
@@ -149,7 +149,7 @@ export component AppWindow inherits Window {
     public function do-copy() { ti.copy(); }
     public function do-paste() { ti.paste(); }
     public function do-select-all() { ti.select-all(); }
-    public function scroll-top() { flick.viewport-y = 0; flick.viewport-x = 0; }
+    public function scroll-top() { flick.content-y = 0; flick.content-x = 0; }
 
     property <int> open-menu: -1;
     property <string> tip-text; property <length> tip-x; property <bool> tip-on;
@@ -275,15 +275,15 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             Rectangle { background: c-editor; horizontal-stretch: 1;
                 flick := Flickable {
-                    viewport-height: max(ti.preferred-height + 40px, self.height);
-                    viewport-width: word-wrap ? self.width : max(ti.preferred-width + gutter.width + 40px, self.width);
+                    content-height: max(ti.preferred-height + 40px, self.height);
+                    content-width: word-wrap ? self.width : max(ti.preferred-width + gutter.width + 40px, self.width);
                     gutter := Rectangle {
                         x: 0; y: 0; width: show-line-numbers ? ln.preferred-width + 16px : 4px;
-                        height: parent.viewport-height; background: c-gutter;
+                        height: parent.content-height; background: c-gutter;
                         ln := Text { visible: show-line-numbers; x: 6px; y: 2px; text: line-numbers;
                             font-family: mono; font-size: editor-font-size; color: c-gutter-fg; horizontal-alignment: right; }
                     }
-                    Rectangle { x: gutter.width; y: ti.y + caret-y; width: max(flick.viewport-width, flick.width) - gutter.width; height: line-h; background: c-curline; }
+                    Rectangle { x: gutter.width; y: ti.y + caret-y; width: max(flick.content-width, flick.width) - gutter.width; height: line-h; background: c-curline; }
                     metric := Text { visible: false; text: "Xg"; font-family: mono; font-size: editor-font-size; }
                     for l in overlay ? hl-lines : []: HorizontalLayout {
                         x: ti.x; y: ti.y + l.line * line-h; height: line-h; spacing: 0; alignment: start;
@@ -295,7 +295,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     edarea := TouchArea {
-                        x: 0; y: 0; width: flick.viewport-width; height: flick.viewport-height;
+                        x: 0; y: 0; width: flick.content-width; height: flick.content-height;
                         mouse-cursor: text;
                         pointer-event(ev) => {
                             if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right) {
@@ -320,11 +320,11 @@ export component AppWindow inherits Window {
                         cursor-position-changed(p) => {
                             caret-x = p.x; caret-y = p.y;
                             cursor-moved(self.cursor-position_byte-offset);
-                            if (p.y + flick.viewport-y < 0) { flick.viewport-y = -p.y + 4px; }
-                            if (p.y + flick.viewport-y > flick.height - editor-font-size * 2) { flick.viewport-y = -(p.y - flick.height + editor-font-size * 2); }
+                            if (p.y + flick.content-y < 0) { flick.content-y = -p.y + 4px; }
+                            if (p.y + flick.content-y > flick.height - editor-font-size * 2) { flick.content-y = -(p.y - flick.height + editor-font-size * 2); }
                             if (!word-wrap) {
-                                if (p.x + gutter.width + flick.viewport-x < gutter.width) { flick.viewport-x = min(0, -p.x + 20px); }
-                                if (p.x + gutter.width + flick.viewport-x > flick.width - 30px) { flick.viewport-x = -(p.x + gutter.width - flick.width + 60px); }
+                                if (p.x + gutter.width + flick.content-x < gutter.width) { flick.content-x = min(0, -p.x + 20px); }
+                                if (p.x + gutter.width + flick.content-x > flick.width - 30px) { flick.content-x = -(p.x + gutter.width - flick.width + 60px); }
                             }
                         }
                     }
