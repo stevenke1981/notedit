@@ -5,6 +5,7 @@ mod highlight;
 mod search;
 mod settings;
 mod file_io;
+mod recovery;
 
 use i_slint_backend_winit::{WinitWindowAccessor, WinitWindowEventResult};
 
@@ -258,6 +259,90 @@ impl App {
         }
     }
 
+    fn recovery_session(&self) -> recovery::RecoverySession {
+        let st = self.st.borrow();
+        let docs = st.docs.iter().filter(|d| d.modified).map(|d| recovery::RecoveryDoc {
+            path: d.path.clone(),
+            title: d.title.clone(),
+            text: d.text.clone(),
+            eol: match d.eol { Eol::Crlf => "crlf", Eol::Lf => "lf", Eol::Cr => "cr" }.into(),
+            encoding: d.encoding.name().to_string(),
+            bom: d.bom,
+            lang: d.lang.clone(),
+            cursor: d.cursor,
+        }).collect();
+        recovery::RecoverySession::new(docs)
+    }
+
+    fn persist_recovery(&self) {
+        let session = self.recovery_session();
+        if let Err(e) = recovery::save(&settings::config_dir(), &session) {
+            eprintln!("NotEdit: failed to save crash-recovery journal: {e}");
+        }
+    }
+
+    fn restore_recovery(&self) {
+        let dir = settings::config_dir();
+        let session = match recovery::load(&dir) {
+            Ok(Some(session)) if !session.docs.is_empty() => session,
+            Ok(_) => return,
+            Err(e) => {
+                eprintln!("NotEdit: failed to read crash-recovery journal: {e}");
+                return;
+            }
+        };
+
+        let answer = rfd::MessageDialog::new()
+            .set_title("NotEdit")
+            .set_description(format!("偵測到上次未正常關閉留下的 {} 個未儲存文件。\n\n是否復原？復原內容只會先放回編輯器，不會自動覆寫原檔。", session.docs.len()))
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show();
+        if answer != rfd::MessageDialogResult::Yes {
+            if let Err(e) = recovery::clear(&dir) {
+                eprintln!("NotEdit: failed to discard crash-recovery journal: {e}");
+            }
+            return;
+        }
+
+        let mut st = self.st.borrow_mut();
+        for rd in session.docs {
+            let normalized_path = rd.path.map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+            let mut d = Doc::new(0);
+            d.path = normalized_path.clone();
+            d.title = rd.title;
+            d.text = rd.text;
+            d.eol = match rd.eol.as_str() { "crlf" => Eol::Crlf, "cr" => Eol::Cr, _ => Eol::Lf };
+            d.encoding = match rd.encoding.as_str() {
+                "UTF-16LE" => encoding_rs::UTF_16LE,
+                "UTF-16BE" => encoding_rs::UTF_16BE,
+                _ => encoding_rs::Encoding::for_label(rd.encoding.as_bytes()).unwrap_or(encoding_rs::UTF_8),
+            };
+            d.bom = rd.bom;
+            d.lang = rd.lang;
+            d.modified = true;
+            let mut cursor = rd.cursor.min(d.text.len());
+            while cursor > 0 && !d.text.is_char_boundary(cursor) { cursor -= 1; }
+            d.cursor = cursor;
+
+            if let Some(i) = normalized_path.as_ref().and_then(|p| st.docs.iter().position(|x| x.path.as_ref() == Some(p))) {
+                st.docs[i] = d;
+                st.cur = i;
+            } else {
+                let replace_blank = st.docs.len() == 1
+                    && st.docs[0].path.is_none()
+                    && !st.docs[0].modified
+                    && st.docs[0].text.is_empty();
+                if replace_blank {
+                    st.docs[0] = d;
+                    st.cur = 0;
+                } else {
+                    st.docs.push(d);
+                    st.cur = st.docs.len() - 1;
+                }
+            }
+        }
+    }
+
     fn refresh_meta(&self) {
         self.ver.set(self.ver.get() + 1);
         let ui = self.ui();
@@ -424,6 +509,7 @@ impl App {
         }
         self.refresh_meta();
         self.refresh_preview();
+        self.persist_recovery();
         true
     }
 
@@ -447,6 +533,7 @@ impl App {
             if st.cur >= st.docs.len() || st.cur > idx { st.cur = st.cur.saturating_sub(1).min(st.docs.len() - 1); }
         }
         self.refresh_all();
+        self.persist_recovery();
         true
     }
 
@@ -896,7 +983,15 @@ impl App {
         self.persist();
         loop {
             let idx = self.st.borrow().docs.iter().position(|d| d.modified);
-            match idx { Some(i) => { self.st.borrow_mut().cur = i; self.refresh_all(); if !self.close(i) { return false; } } None => { return true; } }
+            match idx {
+                Some(i) => { self.st.borrow_mut().cur = i; self.refresh_all(); if !self.close(i) { return false; } }
+                None => {
+                    if let Err(e) = recovery::clear(&settings::config_dir()) {
+                        eprintln!("NotEdit: failed to clear crash-recovery journal: {e}");
+                    }
+                    return true;
+                }
+            }
         }
     }
 }
@@ -1027,6 +1122,7 @@ fn main() -> Result<(), slint::PlatformError> {
         app.st.borrow_mut().cur = sel.min(n - 1);
     }
     for arg in args { app.open_path(PathBuf::from(arg)); }
+    app.restore_recovery();
     app.refresh_all();
 
     // drag & drop files from the OS
@@ -1058,6 +1154,13 @@ fn main() -> Result<(), slint::PlatformError> {
     let a3 = app.clone();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(30), move || a3.tick_highlight());
+
+    // Periodically journal only modified buffers. Recovery never writes source
+    // files; it is removed after a clean exit or once every buffer is saved.
+    let ar = app.clone();
+    let recovery_timer = slint::Timer::default();
+    recovery_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || ar.persist_recovery());
+
     let a2 = app.clone();
     ui.window().on_close_requested(move || if a2.confirm_exit() { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown });
     ui.run()
