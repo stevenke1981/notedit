@@ -87,7 +87,8 @@ mod tests {
 
     fn dir() -> PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let d = std::env::temp_dir().join(format!("notedit-file-io-{}-{stamp}", std::process::id()));
+        let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("notedit-file-io-{}-{stamp}-{n}", std::process::id()));
         fs::create_dir_all(&d).unwrap();
         d
     }
