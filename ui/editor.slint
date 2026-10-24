@@ -1,0 +1,196 @@
+// Custom editor surface: everything (layout, wrap, folding, carets, selections)
+// is computed in Rust; this component only draws rows and forwards input.
+export struct EdTok { x: length, text: string, color: color, bold: bool, italic: bool }
+export struct EdRect { x: length, w: length, kind: int }
+export struct EdRow { num: string, line: int, fold: int, cur: bool, mark: bool, toks: [EdTok], rects: [EdRect] }
+export struct EdCaret { x: length, y: length }
+export struct MapLine { y: length, x: length, w: length, color: color }
+export struct EdState {
+    rows: [EdRow], carets: [EdCaret],
+    gutter-w: length, num-w: length,
+    thumb-pos: float, thumb-size: float,
+    hthumb-pos: float, hthumb-size: float, hbar: bool,
+    ac-items: [string], ac-sel: int, ac-visible: bool,
+    title: string,
+    map-lines: [MapLine], map-view-y: length, map-view-h: length,
+}
+
+export component EditorView inherits Rectangle {
+    in property <EdState> st;
+    in property <length> line-h: 18px;
+    in property <length> cell-w: 8px;
+    in property <length> font-size: 14px;
+    in property <string> mono;
+    in property <bool> dark;
+    in property <bool> overwrite;
+    in property <bool> map-visible;
+    in property <bool> active: true;
+    out property <length> text-w: text-area.width;
+    out property <length> text-h: text-area.height;
+    callback key(string, bool, bool, bool) -> bool;
+    callback input(string);
+    callback mouse(int, length, length, bool, bool, bool);
+    callback gutter(int, bool, bool);
+    callback wheel(length, length, bool, bool);
+    callback vscroll(float);
+    callback hscroll(float);
+    callback ac-pick(int);
+    callback map-click(float);
+    callback context(length, length);
+    callback focused;
+    public function focus-in() { ime.focus(); }
+
+    property <color> c-fg: dark ? #dcdcdc : #1e1e1e;
+    property <color> c-gutter: dark ? #2d2d30 : #e4e4e4;
+    property <color> c-gutter-fg: dark ? #858585 : #808080;
+    property <color> c-curline: dark ? #2a2d3e : #e8f2fe;
+    property <color> c-sel: dark ? #264f78 : #c0d8f0;
+    property <color> c-mark: dark ? #3a5a3a : #b4f0b4;
+    property <color> c-bracket: dark ? #5a4a20 : #ffd97a;
+    property <color> c-track: dark ? #252526 : #f0f0f0;
+    property <color> c-thumb: dark ? #5a5a5a : #c2c2c2;
+    property <bool> blink: true;
+    changed st => { blink = true; }
+    background: dark ? #1e1e1e : #ffffff;
+
+    Timer { interval: 530ms; running: ime.has-focus; triggered => { blink = !blink; } }
+
+    VerticalLayout {
+        if st.title != "": Rectangle { height: 20px; background: active ? (dark ? #3a3d41 : #dde6f2) : (dark ? #2b2b2b : #ececec);
+            Text { x: 6px; text: st.title; color: c-fg; vertical-alignment: center; font-weight: active ? 700 : 400; }
+        }
+        HorizontalLayout {
+            body := Rectangle {
+                clip: true;
+                gutter-area := Rectangle {
+                    x: 0; y: 0; width: st.gutter-w; height: parent.height; background: c-gutter;
+                    for r[i] in st.rows: Rectangle {
+                        y: i * line-h; height: line-h;
+                        if r.mark: Rectangle { x: 3px; y: (line-h - 10px) / 2; width: 10px; height: 10px; border-radius: 5px; background: #2a6fc9; border-width: 1px; border-color: #1a4f99; }
+                        if st.num-w > 0: Text { x: 16px; width: st.num-w; text: r.num; color: r.cur ? c-fg : c-gutter-fg; font-family: mono; font-size: font-size;
+                            horizontal-alignment: right; vertical-alignment: top; }
+                        if r.fold > 0: Rectangle {
+                            x: st.gutter-w - 13px; y: (line-h - 9px) / 2; width: 9px; height: 9px;
+                            border-width: 1px; border-color: c-gutter-fg; background: dark ? #2d2d30 : #ffffff;
+                            Rectangle { x: 2px; y: 4px; width: 5px; height: 1px; background: c-fg; }
+                            if r.fold == 2: Rectangle { x: 4px; y: 2px; width: 1px; height: 5px; background: c-fg; }
+                        }
+                    }
+                    TouchArea {
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                                ime.focus();
+                                gutter(floor(self.mouse-y / line-h), self.mouse-x >= st.gutter-w - 15px, ev.modifiers.shift);
+                            }
+                        }
+                    }
+                }
+                text-area := Rectangle {
+                    x: st.gutter-w; y: 0;
+                    width: parent.width - st.gutter-w - 12px;
+                    height: parent.height - (st.hbar ? 12px : 0px);
+                    clip: true;
+                    for r[i] in st.rows: Rectangle {
+                        y: i * line-h; height: line-h; width: parent.width;
+                        background: r.cur ? c-curline : transparent;
+                        for s in r.rects: Rectangle { x: s.x; width: s.w; height: line-h;
+                            background: s.kind == 0 ? c-sel : s.kind == 1 ? c-mark : s.kind == 2 ? c-bracket : #ffa50060; }
+                        for t in r.toks: Text { x: t.x; y: 0; text: t.text; color: t.color; font-family: mono; font-size: font-size;
+                            font-weight: t.bold ? 700 : 400; font-italic: t.italic; vertical-alignment: top; }
+                        if r.fold == 2: Rectangle { y: line-h - 1px; height: 1px; background: c-gutter-fg; }
+                    }
+                    for c in st.carets: Rectangle {
+                        x: c.x; y: c.y; width: overwrite ? cell-w : 2px; height: line-h;
+                        background: overwrite ? (dark ? #ffffff70 : #00000060) : c-fg;
+                        visible: blink && ime.has-focus;
+                    }
+                    ta := TouchArea {
+                        mouse-cursor: text;
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                                ime.focus();
+                                mouse(0, self.mouse-x, self.mouse-y, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                            }
+                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right) {
+                                ime.focus();
+                                context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            }
+                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                                mouse(2, self.mouse-x, self.mouse-y, false, false, false);
+                            }
+                        }
+                        moved => { if (self.pressed) { mouse(1, self.mouse-x, self.mouse-y, false, false, false); } }
+                        scroll-event(e) => { wheel(e.delta-x, e.delta-y, e.modifiers.shift, e.modifiers.control); accept }
+                    }
+                    if ime.preedit-text != "": Rectangle {
+                        x: ime.x; y: ime.y; width: ime.preferred-width + 2px; height: line-h;
+                        background: dark ? #1e1e1e : #ffffff; border-width: 1px; border-color: c-gutter-fg;
+                    }
+                    ime := TextInput {
+                        x: st.carets.length > 0 ? st.carets[0].x : 0px;
+                        y: st.carets.length > 0 ? st.carets[0].y : 0px;
+                        width: self.preferred-width + 2px; height: line-h;
+                        single-line: true;
+                        font-family: mono; font-size: font-size; color: c-fg;
+                        text-cursor-width: 0px;
+                        key-pressed(e) => {
+                            if (root.key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt)) { return accept; }
+                            reject
+                        }
+                        edited => { if (self.text != "") { root.input(self.text); self.text = ""; } }
+                        changed has-focus => { if (self.has-focus) { root.focused(); } }
+                    }
+                    if st.ac-visible && st.carets.length > 0: Rectangle {
+                        property <length> h: min(st.ac-items.length, 10) * 20px + 4px;
+                        x: min(st.carets[0].x, parent.width - 240px);
+                        y: st.carets[0].y + line-h + h < parent.height ? st.carets[0].y + line-h : st.carets[0].y - h;
+                        width: 240px; height: h;
+                        background: dark ? #252526 : #ffffff; border-width: 1px; border-color: c-gutter-fg;
+                        drop-shadow-blur: 6px; drop-shadow-color: #0004;
+                        for it[i] in st.ac-items: Rectangle {
+                            x: 2px; y: 2px + i * 20px; width: parent.width - 4px; height: 20px;
+                            visible: i < 10;
+                            background: i == st.ac-sel ? (dark ? #094771 : #cce4f7) : transparent;
+                            Text { x: 6px; text: it; color: c-fg; font-family: mono; font-size: 13px; vertical-alignment: center; }
+                            TouchArea { clicked => { ac-pick(i); } }
+                        }
+                    }
+                }
+                // vertical scrollbar
+                vbar := Rectangle {
+                    x: parent.width - 12px; y: 0; width: 12px; height: text-area.height; background: c-track;
+                    property <length> th: max(24px, self.height * st.thumb-size);
+                    Rectangle { x: 2px; y: (parent.height - parent.th) * st.thumb-pos; width: 8px; height: parent.th; border-radius: 4px;
+                        background: vta.pressed ? (dark ? #8a8a8a : #8f8f8f) : c-thumb; }
+                    vta := TouchArea {
+                        pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { vscroll(max(0, min(1, (self.mouse-y - parent.th / 2) / max(1px, parent.height - parent.th)))); } }
+                        moved => { if (self.pressed) { vscroll(max(0, min(1, (self.mouse-y - parent.th / 2) / max(1px, parent.height - parent.th)))); } }
+                    }
+                }
+                if st.hbar: Rectangle {
+                    x: st.gutter-w; y: parent.height - 12px; width: text-area.width; height: 12px; background: c-track;
+                    property <length> tw: max(24px, self.width * st.hthumb-size);
+                    Rectangle { y: 2px; x: (parent.width - parent.tw) * st.hthumb-pos; height: 8px; width: parent.tw; border-radius: 4px; background: c-thumb; }
+                    TouchArea {
+                        pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { hscroll(max(0, min(1, (self.mouse-x - parent.tw / 2) / max(1px, parent.width - parent.tw)))); } }
+                        moved => { if (self.pressed) { hscroll(max(0, min(1, (self.mouse-x - parent.tw / 2) / max(1px, parent.width - parent.tw)))); } }
+                    }
+                }
+            }
+            // document map
+            Rectangle {
+                width: map-visible ? 90px : 0px;
+                visible: map-visible;
+                background: dark ? #252526 : #f7f7f7;
+                clip: true;
+                Rectangle { x: 0; width: 1px; background: c-gutter-fg; }
+                for m in st.map-lines: Rectangle { x: 4px + m.x; y: m.y; width: m.w; height: 1px; background: m.color; }
+                Rectangle { y: st.map-view-y; height: max(4px, st.map-view-h); background: dark ? #ffffff18 : #0000ff14; border-width: 1px; border-color: dark ? #ffffff40 : #2a6fc980; }
+                TouchArea {
+                    pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { map-click(self.mouse-y / max(1px, self.height)); } }
+                    moved => { if (self.pressed) { map-click(self.mouse-y / max(1px, self.height)); } }
+                }
+            }
+        }
+    }
+}

@@ -7,7 +7,7 @@ NotEdit is intentionally cross-platform and Rust + Slint based. "Parity" therefo
 
 ## Current baseline
 
-Already implemented in NotEdit v0.2.1:
+Already implemented in NotEdit v0.3.0:
 
 - multi-tab editing, drag/drop and tab reorder
 - syntax highlighting with syntect
@@ -21,6 +21,7 @@ Already implemented in NotEdit v0.2.1:
 - dark theme, fonts, zoom, status bar
 - editor and tab context menus
 - release builds for Windows, Linux and macOS
+- v0.3.0: custom ropey-based editor surface (`src/editor.rs` headless core + `ui/editor.slint`): wrap with highlighting, folding, split/clone view, multi-caret + column selection, autocomplete, bookmarks, document map, macro recording of shortcuts and menu actions
 
 ## Priority matrix
 
@@ -30,17 +31,17 @@ Already implemented in NotEdit v0.2.1:
 | P0 | Crash/session recovery | Implemented (#3) | Recover modified named and unnamed buffers after abnormal exit without overwriting source files |
 | P0 | External file-change detection | Implemented (#4) | Detect changed/deleted files, offer reload/keep choices, and surface recovery-vs-disk conflicts |
 | P0 | Lossless legacy-encoding saves | Implemented (#6) | Refuse writes that would replace unrepresentable characters; regression tests cover legacy and Unicode encodings |
-| P0 | Large-file behavior | Partial (#5, #7) | Slint 1.18.1 plus bounded undo memory and fewer full-document status/line-number rescans; deeper full-text edit-model work remains |
+| P0 | Large-file behavior | Implemented (v0.3.0) | ropey buffer + custom virtualized editor surface; incremental, time-budgeted highlighting |
 | P1 | Find in Files | Missing | Folder scope, filters, regex, recursive mode, result panel, click-to-open |
 | P1 | Folder as Workspace | Missing | Tree panel, refresh, open/rename/create/delete with safe confirmation |
 | P1 | Function List | Missing | Language-aware symbol extraction, filter, click-to-navigate |
-| P1 | Auto-completion | Missing | Word completion plus language keywords; keyboard navigation; configurable enable/disable |
-| P1 | Bookmarks + search marks | Missing | Toggle/navigate bookmarks and mark-all search hits |
-| P2 | Dual/split view | Missing | Move or clone a document into a second synchronized editor view |
-| P2 | Multi-selection / multi-caret | Missing | Multiple carets and simultaneous edits with correct undo grouping |
-| P2 | Column mode | Missing | Rectangular selection/edit with status reporting |
-| P2 | Code folding | Missing | Fold/unfold scopes with visible gutter controls and preserved navigation |
-| P2 | Document Map | Missing | Minimap/document overview with viewport indicator |
+| P1 | Auto-completion | Implemented (v0.3.0) | Word completion plus language keywords; keyboard navigation; configurable enable/disable |
+| P1 | Bookmarks + search marks | Partial (v0.3.0: bookmarks, mark-all occurrences of selected word) | Toggle/navigate bookmarks and mark-all search hits |
+| P2 | Dual/split view | Partial (v0.3.0: clone into second view; move-to-other-view missing) | Move or clone a document into a second synchronized editor view |
+| P2 | Multi-selection / multi-caret | Implemented (v0.3.0) | Multiple carets and simultaneous edits with correct undo grouping |
+| P2 | Column mode | Partial (v0.3.0: Alt+drag / Alt+Shift+arrows; no column editor dialog) | Rectangular selection/edit with status reporting |
+| P2 | Code folding | Implemented (v0.3.0: bracket/indent based) | Fold/unfold scopes with visible gutter controls and preserved navigation |
+| P2 | Document Map | Implemented (v0.3.0) | Minimap/document overview with viewport indicator |
 | P2 | Tab management parity | Partial | pin tabs, sort tabs, close unchanged/left/right, MRU switcher |
 | P3 | User Defined Languages | Missing | User-editable syntax definitions independent of built-in syntect definitions |
 | P3 | Plugin API | Missing | Versioned, permission-aware extension boundary with failure isolation |

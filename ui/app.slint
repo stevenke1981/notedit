@@ -1,16 +1,16 @@
 import { Button, LineEdit, CheckBox, ScrollView, ListView } from "std-widgets.slint";
+import { EditorView, EdState } from "editor.slint";
+export { EdState, EdTok, EdRect, EdRow, EdCaret, MapLine } from "editor.slint";
 import "fonts/DejaVuSansMono.ttf";
 import "fonts/DejaVuSansMono-Bold.ttf";
 import "fonts/JetBrainsMono-Regular.ttf";
 import "fonts/JetBrainsMono-Bold.ttf";
 import "fonts/JetBrainsMono-Italic.ttf";
-export struct HlToken { text: string, color: color, bold: bool, italic: bool, bg: bool }
 export struct SearchHit { doc: int, title: string, line: int, start: int, end: int, text: string }
-export struct HlLine { line: int, tokens: [HlToken] }
 
 export struct MenuItem { label: string, shortcut: string, action: string, separator: bool, checked: bool, enabled: bool }
 export struct Menu { title: string, items: [MenuItem] }
-export struct TabInfo { title: string, modified: bool }
+export struct TabInfo { title: string, modified: bool, w: length }
 export struct Block { text: string, kind: int, indent: int, bold: bool, italic: bool, code: bool, link: bool }
 
 component ToolBtn inherits Rectangle {
@@ -41,7 +41,10 @@ component Dialog inherits Rectangle {
                     TouchArea { clicked => { root.close(); } } }
             }
         }
-        @children
+        FocusScope {
+            key-pressed(e) => { if (e.text == Key.Escape) { root.close(); return accept; } reject }
+            VerticalLayout { @children }
+        }
     }
 }
 
@@ -52,13 +55,10 @@ export component AppWindow inherits Window {
     default-font-size: 13px;
 
     in property <string> window-title: "NotEdit";
+    in property <string> version;
     in property <[Menu]> menus;
     in property <[TabInfo]> tabs;
     in-out property <int> current-tab: 0;
-    in-out property <string> editor-text;
-    in property <string> line-numbers: "1";
-    in property <bool> show-line-numbers: true;
-    in property <bool> word-wrap: false;
     in property <length> editor-font-size: 14px;
     in property <bool> show-preview: false;
     in property <[Block]> preview-blocks;
@@ -78,8 +78,6 @@ export component AppWindow inherits Window {
     in-out property <string> replace-text;
     in-out property <bool> match-case: false;
     in property <int> total-lines: 1;
-    in property <[HlLine]> hl-lines;
-    in property <bool> hl-active: false;
     in property <bool> dark: false;
     in property <[SearchHit]> hits;
     in property <string> hits-title;
@@ -107,18 +105,31 @@ export component AppWindow inherits Window {
     property <int> drag-from: -1;
     property <int> drop-target: -1;
     property <length> drag-abs-x;
-    out property <length> scroll-y: -flick.content-y;
-    out property <length> view-h: flick.height;
-    out property <length> line-h: metric.preferred-height;
     in property <string> mono: "JetBrains Mono";
-    property <bool> overlay: !word-wrap;
-    property <length> caret-x; property <length> caret-y;
-    out property <int> cursor-byte: ti.cursor-position_byte-offset;
-    out property <int> anchor-byte: ti.anchor-position-byte-offset;
+    in property <EdState> v0;
+    in property <EdState> v1;
+    in property <bool> split: false;
+    in property <bool> docmap: false;
+    in property <int> active-view: 0;
+    out property <length> cell-w: metric.preferred-width / 20;
+    out property <length> line-h: metric.preferred-height;
+    out property <length> v0-w: ev0.text-w;
+    out property <length> v0-h: ev0.text-h;
+    out property <length> v1-w: ev1.text-w;
+    out property <length> v1-h: ev1.text-h;
+    callback ed-key(int, string, bool, bool, bool) -> bool;
+    callback ed-input(int, string);
+    callback ed-mouse(int, int, length, length, bool, bool, bool);
+    callback ed-gutter(int, int, bool, bool);
+    callback ed-wheel(int, length, length, bool, bool);
+    callback ed-vscroll(int, float);
+    callback ed-hscroll(int, float);
+    callback ed-ac-pick(int, int);
+    callback ed-map(int, float);
+    callback ed-focused(int);
+    callback tab-target(int, length) -> int;
 
     callback menu-action(string);
-    callback text-edited(string);
-    callback cursor-moved(int);
     callback tab-selected(int);
     callback tab-close(int);
     callback find-next(bool);
@@ -129,27 +140,11 @@ export component AppWindow inherits Window {
     callback link-clicked(string);
     callback context-request(string, int);
     callback rename-accepted(string);
-    callback editor-key(string, bool, bool, bool) -> bool;
     callback tab-move(int, int);
     callback find-all();
     callback hit-clicked(int);
 
-    public function select-range(s: int, e: int) { ti.set-selection-offsets(s, e); ti.focus(); }
-    public function focus-editor() { ti.focus(); }
-    // called from Rust on a raw right mouse press (TextInput swallows right clicks)
-    public function editor-right-click(x: length, y: length) {
-        if (x >= flick.absolute-position.x - root.absolute-position.x && x < flick.absolute-position.x - root.absolute-position.x + flick.width
-            && y >= flick.absolute-position.y - root.absolute-position.y && y < flick.absolute-position.y - root.absolute-position.y + flick.height
-            && !find-visible && !goto-visible && !rename-visible && !about-visible) {
-            ctx-x = x; ctx-y = y; open-menu = -1;
-            context-request("editor", -1);
-        }
-    }
-    public function do-cut() { ti.cut(); }
-    public function do-copy() { ti.copy(); }
-    public function do-paste() { ti.paste(); }
-    public function do-select-all() { ti.select-all(); }
-    public function scroll-top() { flick.content-y = 0; flick.content-x = 0; }
+    public function focus-editor() { if (split && active-view == 1) { ev1.focus-in(); } else { ev0.focus-in(); } }
 
     property <int> open-menu: -1;
     property <string> tip-text; property <length> tip-x; property <bool> tip-on;
@@ -158,7 +153,7 @@ export component AppWindow inherits Window {
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(e) => {
-            if (e.modifiers.control) {
+            if (e.modifiers.control && !e.modifiers.alt) {
                 if ((e.text == "r" || e.text == "R") && e.modifiers.shift) { menu-action("macrorec"); return accept; }
                 if ((e.text == "p" || e.text == "P") && e.modifiers.shift) { menu-action("macroplay"); return accept; }
                 if ((e.text == "s" || e.text == "S") && e.modifiers.shift) { menu-action("saveas"); return accept; }
@@ -178,9 +173,12 @@ export component AppWindow inherits Window {
                 if (e.text == "0") { menu-action("zoomreset"); return accept; }
                 if (e.text == Key.Tab) { menu-action("nexttab"); return accept; }
             }
+            if (e.modifiers.control && e.modifiers.alt && (e.text == "f" || e.text == "F")) { menu-action("foldcur"); return accept; }
+            if (e.modifiers.alt && !e.modifiers.control && (e.text == "0" || e.text == ")")) { menu-action(e.modifiers.shift ? "unfoldall" : "foldall"); return accept; }
+            if (e.text == Key.F8) { menu-action("otherview"); return accept; }
             if (e.text == Key.F3) { find-next(!e.modifiers.shift); return accept; }
             if (e.text == Key.Insert) { menu-action("toggleovr"); return accept; }
-            if (e.text == Key.Escape) { find-visible = false; goto-visible = false; hits-visible = false; about-visible = false; open-menu = -1; ctx-visible = false; rename-visible = false; ti.focus(); return accept; }
+            if (e.text == Key.Escape) { find-visible = false; goto-visible = false; hits-visible = false; about-visible = false; open-menu = -1; ctx-visible = false; rename-visible = false; focus-editor(); return accept; }
             reject
         }
 
@@ -211,9 +209,9 @@ export component AppWindow inherits Window {
                 ToolBtn { icon: @image-url("icons/closeall.svg"); tip: "全部關閉"; clicked => { menu-action("closeall"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 ToolBtn { icon: @image-url("icons/print.svg"); tip: "列印 (以瀏覽器開啟可列印的 HTML)"; clicked => { menu-action("print"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 Sep {}
-                ToolBtn { icon: @image-url("icons/cut.svg"); tip: "剪下 (Ctrl+X)"; clicked => { do-cut(); } hover(t, x, h) => { show-tip(t, x, h); } }
-                ToolBtn { icon: @image-url("icons/copy.svg"); tip: "複製 (Ctrl+C)"; clicked => { do-copy(); } hover(t, x, h) => { show-tip(t, x, h); } }
-                ToolBtn { icon: @image-url("icons/paste.svg"); tip: "貼上 (Ctrl+V)"; clicked => { do-paste(); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/cut.svg"); tip: "剪下 (Ctrl+X)"; clicked => { menu-action("cut"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/copy.svg"); tip: "複製 (Ctrl+C)"; clicked => { menu-action("copy"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/paste.svg"); tip: "貼上 (Ctrl+V)"; clicked => { menu-action("paste"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 Sep {}
                 ToolBtn { icon: @image-url("icons/undo.svg"); tip: "復原 (Ctrl+Z)"; clicked => { menu-action("undo"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 ToolBtn { icon: @image-url("icons/redo.svg"); tip: "取消復原 (Ctrl+Y)"; clicked => { menu-action("redo"); } hover(t, x, h) => { show-tip(t, x, h); } }
@@ -226,7 +224,7 @@ export component AppWindow inherits Window {
                 Sep {}
                 ToolBtn { icon: @image-url("icons/wrap.svg"); tip: "自動換行"; clicked => { menu-action("wrap"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 ToolBtn { icon: @image-url("icons/linenumbers.svg"); tip: "顯示行號"; clicked => { menu-action("linenumbers"); } hover(t, x, h) => { show-tip(t, x, h); } }
-                ToolBtn { icon: @image-url("icons/selectall.svg"); tip: "全選 (Ctrl+A)"; clicked => { do-select-all(); } hover(t, x, h) => { show-tip(t, x, h); } }
+                ToolBtn { icon: @image-url("icons/selectall.svg"); tip: "全選 (Ctrl+A)"; clicked => { menu-action("selectall"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 ToolBtn { icon: @image-url("icons/preview.svg"); tip: "HTML / Markdown 預覽"; clicked => { menu-action("preview"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 Rectangle {}
             }
@@ -235,7 +233,7 @@ export component AppWindow inherits Window {
         Rectangle { height: 26px; background: c-tabbar;
             HorizontalLayout { padding-left: 2px; spacing: 1px; alignment: start;
                 for t[i] in tabs: Rectangle {
-                    width: tt.preferred-width + 44px;
+                    width: t.w;
                     background: i == current-tab ? c-tab-active : tta.has-hover ? c-hover : c-tab;
                     border-width: 1px; border-color: c-border;
                     property <bool> drop-here: drag-from >= 0 && drag-from != i && drop-target == i;
@@ -257,13 +255,13 @@ export component AppWindow inherits Window {
                         }
                         moved => {
                             if (drag-from >= 0) {
-                                drop-target = max(0, min(tabs.length - 1, drag-from + round((self.mouse-x - drag-abs-x) / self.width)));
+                                drop-target = tab-target(drag-from, self.mouse-x - drag-abs-x);
                             }
                         }
                     }
                     HorizontalLayout { padding-left: 6px; padding-right: 4px; spacing: 4px;
                         Text { text: t.modified ? "●" : "○"; color: t.modified ? #d32 : #3a3; vertical-alignment: center; }
-                        tt := Text { color: c-fg; text: t.title; vertical-alignment: center; font-weight: i == current-tab ? 700 : 400; }
+                        tt := Text { color: c-fg; text: t.title; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; font-weight: i == current-tab ? 700 : 400; }
                         Rectangle { width: 16px;
                             Text { text: "✕"; vertical-alignment: center; horizontal-alignment: center; color: xa.has-hover ? #d00 : #777; }
                             xa := TouchArea { clicked => { tab-close(i); } } }
@@ -273,64 +271,39 @@ export component AppWindow inherits Window {
         }
         // ---- editor + preview ----
         HorizontalLayout {
-            Rectangle { background: c-editor; horizontal-stretch: 1;
-                flick := Flickable {
-                    content-height: max(ti.preferred-height + 40px, self.height);
-                    content-width: word-wrap ? self.width : max(ti.preferred-width + gutter.width + 40px, self.width);
-                    gutter := Rectangle {
-                        x: 0; y: 0; width: show-line-numbers ? ln.preferred-width + 16px : 4px;
-                        height: parent.content-height; background: c-gutter;
-                        ln := Text { visible: show-line-numbers; x: 6px; y: 2px; text: line-numbers;
-                            font-family: mono; font-size: editor-font-size; color: c-gutter-fg; horizontal-alignment: right; }
-                    }
-                    Rectangle { x: gutter.width; y: ti.y + caret-y; width: max(flick.content-width, flick.width) - gutter.width; height: line-h; background: c-curline; }
-                    metric := Text { visible: false; text: "Xg"; font-family: mono; font-size: editor-font-size; }
-                    for l in overlay ? hl-lines : []: HorizontalLayout {
-                        x: ti.x; y: ti.y + l.line * line-h; height: line-h; spacing: 0; alignment: start;
-                        for t in l.tokens: Rectangle {
-                            width: tx.preferred-width; height: line-h;
-                            background: t.bg ? (dark ? #3a5a3a : #b4f0b4) : transparent;
-                            tx := Text { x: 0; y: 0; text: t.text; color: t.color; font-family: mono; font-size: editor-font-size;
-                                font-weight: t.bold ? 700 : 400; font-italic: t.italic; vertical-alignment: top; }
-                        }
-                    }
-                    edarea := TouchArea {
-                        x: 0; y: 0; width: flick.content-width; height: flick.content-height;
-                        mouse-cursor: text;
-                        pointer-event(ev) => {
-                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right) {
-                                ctx-x = self.absolute-position.x - root.absolute-position.x + self.mouse-x;
-                                ctx-y = self.absolute-position.y - root.absolute-position.y + self.mouse-y;
-                                open-menu = -1;
-                                context-request("editor", -1);
-                            }
-                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) { ti.focus(); }
-                        }
-                    ti := TextInput {
-                        x: gutter.width + 4px; y: 2px;
-                        width: word-wrap ? flick.width - gutter.width - 12px : max(self.preferred-width, flick.width - gutter.width - 12px);
-                        single-line: false;
-                        wrap: word-wrap ? TextWrap.word-wrap : TextWrap.no-wrap;
-                        font-family: mono; font-size: editor-font-size;
-                        text <=> editor-text;
-                        selection-background-color: dark ? #264f78 : #c0d8f0; selection-foreground-color: c-fg;
-                        color: overlay ? #00000001 : c-fg;
-                        key-pressed(e) => { if (editor-key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt)) { return accept; } reject }
-                        edited => { text-edited(self.text); cursor-moved(self.cursor-position_byte-offset); }
-                        cursor-position-changed(p) => {
-                            caret-x = p.x; caret-y = p.y;
-                            cursor-moved(self.cursor-position_byte-offset);
-                            if (p.y + flick.content-y < 0) { flick.content-y = -p.y + 4px; }
-                            if (p.y + flick.content-y > flick.height - editor-font-size * 2) { flick.content-y = -(p.y - flick.height + editor-font-size * 2); }
-                            if (!word-wrap) {
-                                if (p.x + gutter.width + flick.content-x < gutter.width) { flick.content-x = min(0, -p.x + 20px); }
-                                if (p.x + gutter.width + flick.content-x > flick.width - 30px) { flick.content-x = -(p.x + gutter.width - flick.width + 60px); }
-                            }
-                        }
-                    }
-                    }
-                    if overlay && ti.has-focus: Rectangle { x: ti.x + caret-x; y: ti.y + caret-y; width: overwrite ? 8px : 2px; height: line-h; background: overwrite ? (dark ? #fff8 : #0006) : c-fg; }
-                }
+            metric := Text { visible: false; width: 0; text: "MMMMMMMMMMMMMMMMMMMM"; font-family: mono; font-size: editor-font-size; }
+            ev0 := EditorView {
+                horizontal-stretch: 1;
+                st: v0; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite;
+                map-visible: docmap && !split; active: !split || active-view == 0;
+                key(t, c, s, a) => { ed-key(0, t, c, s, a) }
+                input(t) => { ed-input(0, t); }
+                mouse(k, x, y, c, s, a) => { ed-mouse(0, k, x, y, c, s, a); }
+                gutter(r, f, s) => { ed-gutter(0, r, f, s); }
+                wheel(dx, dy, s, c) => { ed-wheel(0, dx, dy, s, c); }
+                vscroll(f) => { ed-vscroll(0, f); }
+                hscroll(f) => { ed-hscroll(0, f); }
+                ac-pick(i) => { ed-ac-pick(0, i); }
+                map-click(f) => { ed-map(0, f); }
+                focused => { ed-focused(0); }
+                context(x, y) => { ctx-x = x - root.absolute-position.x; ctx-y = y - root.absolute-position.y; open-menu = -1; context-request("editor", 0); }
+            }
+            Rectangle { width: split ? 4px : 0px; background: c-border; }
+            ev1 := EditorView {
+                horizontal-stretch: split ? 1 : 0; max-width: split ? 100000px : 0px; visible: split;
+                st: v1; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite;
+                map-visible: false; active: active-view == 1;
+                key(t, c, s, a) => { ed-key(1, t, c, s, a) }
+                input(t) => { ed-input(1, t); }
+                mouse(k, x, y, c, s, a) => { ed-mouse(1, k, x, y, c, s, a); }
+                gutter(r, f, s) => { ed-gutter(1, r, f, s); }
+                wheel(dx, dy, s, c) => { ed-wheel(1, dx, dy, s, c); }
+                vscroll(f) => { ed-vscroll(1, f); }
+                hscroll(f) => { ed-hscroll(1, f); }
+                ac-pick(i) => { ed-ac-pick(1, i); }
+                map-click(f) => { ed-map(1, f); }
+                focused => { ed-focused(1); }
+                context(x, y) => { ctx-x = x - root.absolute-position.x; ctx-y = y - root.absolute-position.y; open-menu = -1; context-request("editor", 1); }
             }
             if show-preview: Rectangle { width: 1px; background: #aaa; }
             if show-preview: Rectangle { horizontal-stretch: 1; background: #fbfbfb;
@@ -421,7 +394,7 @@ export component AppWindow inherits Window {
                     Text { color: it.enabled ? c-fg : c-gutter-fg; text: it.label; vertical-alignment: center; horizontal-stretch: 1; }
                     Text { text: it.shortcut; vertical-alignment: center; color: c-gutter-fg; }
                 }
-                ia := TouchArea { enabled: !it.separator && it.enabled; clicked => { open-menu = -1; menu-action(it.action); } }
+                ia := TouchArea { enabled: !it.separator && it.enabled; clicked => { menu-action(it.action); open-menu = -1; } }
             }
         }
     }
@@ -432,7 +405,7 @@ export component AppWindow inherits Window {
     // ---- find / replace ----
     if find-visible: Dialog {
         title: replace-mode ? "取代" : "尋找"; x: parent.width - 580px; y: 90px; width: 560px; height: replace-mode ? 236px : 196px;
-        close => { find-visible = false; }
+        close => { find-visible = false; focus-editor(); }
         VerticalLayout { padding: 10px; spacing: 6px;
             HorizontalLayout { spacing: 6px;
                 Text { text: "尋找目標："; width: 70px; vertical-alignment: center; }
@@ -464,7 +437,7 @@ export component AppWindow inherits Window {
 
     if goto-visible: Dialog {
         title: "跳至..."; x: (parent.width - 320px) / 2; y: 120px; width: 320px; height: 130px;
-        close => { goto-visible = false; }
+        close => { goto-visible = false; focus-editor(); }
         VerticalLayout { padding: 10px; spacing: 8px;
             Text { text: "行號 (1 - " + total-lines + ")："; }
             ge := LineEdit { accepted(t) => { goto-line(t); } init => { self.focus(); } }
@@ -474,9 +447,9 @@ export component AppWindow inherits Window {
 
     if about-visible: Dialog {
         title: "關於 NotEdit"; x: (parent.width - 360px) / 2; y: 150px; width: 360px; height: 160px;
-        close => { about-visible = false; }
+        close => { about-visible = false; focus-editor(); }
         VerticalLayout { padding: 14px; spacing: 6px;
-            Text { text: "NotEdit 0.1.0"; font-size: 18px; font-weight: 700; }
+            Text { text: "NotEdit " + version; font-size: 18px; font-weight: 700; }
             Text { text: "以 Rust + Slint 製作的類 Notepad++ 文字編輯器"; }
             Text { text: "支援 HTML / Markdown 預覽"; }
             Button { text: "確定"; clicked => { about-visible = false; } }
@@ -501,14 +474,14 @@ export component AppWindow inherits Window {
                     Text { color: it.enabled ? c-fg : c-gutter-fg; text: it.label; vertical-alignment: center; horizontal-stretch: 1; }
                     Text { text: it.shortcut; vertical-alignment: center; color: c-gutter-fg; }
                 }
-                ca := TouchArea { enabled: !it.separator && it.enabled; clicked => { ctx-visible = false; menu-action(it.action); } }
+                ca := TouchArea { enabled: !it.separator && it.enabled; clicked => { menu-action(it.action); ctx-visible = false; } }
             }
         }
     }
 
     if rename-visible: Dialog {
         title: "重新命名"; x: (parent.width - 380px) / 2; y: 140px; width: 380px; height: 130px;
-        close => { rename-visible = false; }
+        close => { rename-visible = false; focus-editor(); }
         VerticalLayout { padding: 10px; spacing: 8px;
             Text { text: "新的檔名："; }
             re := LineEdit { text <=> rename-text; accepted(t) => { rename-accepted(t); } init => { self.focus(); } }

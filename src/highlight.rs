@@ -1,11 +1,21 @@
 //! Incremental syntect highlighting with per-line state cache.
-use crate::{HlLine, HlToken};
-use slint::{Color, ModelRc, VecModel};
+use ropey::Rope;
+use slint::Color;
 use std::sync::OnceLock;
 use syntect::highlighting::{FontStyle, HighlightIterator, HighlightState, Highlighter, Theme, ThemeSet};
-use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet};
 
-pub fn syntax_set() -> &'static SyntaxSet { static S: OnceLock<SyntaxSet> = OnceLock::new(); S.get_or_init(SyntaxSet::load_defaults_newlines) }
+const TOML_SYNTAX: &str = include_str!("../ui/syntaxes/TOML.sublime-syntax");
+
+/// Default syntect syntaxes plus the bundled extras (TOML).
+pub fn syntax_set() -> &'static SyntaxSet {
+    static S: OnceLock<SyntaxSet> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut b = SyntaxSet::load_defaults_newlines().into_builder();
+        if let Ok(def) = SyntaxDefinition::load_from_str(TOML_SYNTAX, true, None) { b.add(def); }
+        b.build()
+    })
+}
 pub fn theme(dark: bool) -> &'static Theme {
     static T: OnceLock<(Theme, Theme)> = OnceLock::new();
     let t = T.get_or_init(|| {
@@ -25,22 +35,26 @@ pub fn export_html(text: &str, lang: &str, ext: Option<&str>, title: &str, dark:
     format!("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>{esc}</title>\n<style>body{{margin:0}} pre{{margin:0;padding:12px;font-family:'DejaVu Sans Mono',Consolas,monospace;font-size:13px}} @media print{{pre{{white-space:pre-wrap}}}}</style></head><body>\n{body}</body></html>\n")
 }
 
-/// Find the bracket matching the one at/just before `pos` (byte offset). Returns (bracket, match).
-pub fn match_bracket(text: &str, pos: usize) -> Option<(usize, usize)> {
-    let b = text.as_bytes();
-    let at = |i: usize| -> Option<u8> { b.get(i).copied().filter(|c| b"()[]{}".contains(c)) };
-    let i = at(pos).map(|_| pos).or_else(|| pos.checked_sub(1).and_then(|p| at(p).map(|_| p)))?;
-    let c = b[i];
-    let (open, close, fwd) = match c { b'(' => (b'(', b')', true), b'[' => (b'[', b']', true), b'{' => (b'{', b'}', true),
-        b')' => (b'(', b')', false), b']' => (b'[', b']', false), _ => (b'{', b'}', false) };
+/// Find the bracket matching the one at/just before char offset `pos`. Returns (bracket, match).
+pub fn match_bracket(rope: &Rope, pos: usize) -> Option<(usize, usize)> {
+    const LIMIT: usize = 1_000_000;
+    let len = rope.len_chars();
+    let is_br = |c: char| "()[]{}".contains(c);
+    let i = if pos < len && is_br(rope.char(pos)) { pos } else if pos > 0 && pos <= len && is_br(rope.char(pos - 1)) { pos - 1 } else { return None };
+    let c = rope.char(i);
+    let (open, close, fwd) = match c { '(' => ('(', ')', true), '[' => ('[', ']', true), '{' => ('{', '}', true),
+        ')' => ('(', ')', false), ']' => ('[', ']', false), _ => ('{', '}', false) };
     let mut depth = 0i32;
     if fwd {
-        for (j, &x) in b.iter().enumerate().skip(i) {
-            if x == open { depth += 1 } else if x == close { depth -= 1; if depth == 0 { return Some((i, j)); } }
+        for (k, x) in rope.chars_at(i).enumerate().take(LIMIT) {
+            if x == open { depth += 1 } else if x == close { depth -= 1; if depth == 0 { return Some((i, i + k)); } }
         }
     } else {
-        for j in (0..=i).rev() {
-            let x = b[j];
+        let mut it = rope.chars_at(i + 1);
+        let mut j = i + 1;
+        for _ in 0..LIMIT {
+            let Some(x) = it.prev() else { break };
+            j -= 1;
             if x == close { depth += 1 } else if x == open { depth -= 1; if depth == 0 { return Some((i, j)); } }
         }
     }
@@ -50,35 +64,14 @@ pub fn match_bracket(text: &str, pos: usize) -> Option<(usize, usize)> {
 #[derive(Clone)]
 pub struct Tok { pub text: String, pub color: Color, pub bold: bool, pub italic: bool }
 
-fn split_marks(toks: Vec<Tok>, marks: &[usize]) -> Vec<(Tok, bool)> {
-    let mut out = Vec::new();
-    let mut off = 0;
-    for t in toks {
-        let len = t.text.len();
-        let mut cuts: Vec<usize> = marks.iter().filter(|&&m| m >= off && m < off + len).map(|m| m - off).collect();
-        cuts.sort();
-        let mut start = 0;
-        for c in cuts {
-            let end = t.text[c..].chars().next().map(|ch| c + ch.len_utf8()).unwrap_or(c);
-            if c > start { out.push((Tok { text: t.text[start..c].to_string(), ..t.clone() }, false)); }
-            out.push((Tok { text: t.text[c..end].to_string(), ..t.clone() }, true));
-            start = end;
-        }
-        if start < len { out.push((Tok { text: t.text[start..].to_string(), ..t.clone() }, false)); }
-        off += len;
-    }
-    out
-}
-
 pub struct Hl {
     syntax: Option<String>, // syntax name
     dark: bool,
-    src: String,            // text the cache corresponds to
     lines: Vec<Vec<Tok>>,   // highlighted lines
     states: Vec<(ParseState, HighlightState)>, // state at start of line i (len == lines.len()+1)
 }
 
-impl Default for Hl { fn default() -> Self { Hl { syntax: None, dark: false, src: String::new(), lines: vec![], states: vec![] } } }
+impl Default for Hl { fn default() -> Self { Hl { syntax: None, dark: false, lines: vec![], states: vec![] } } }
 
 fn find_syntax(lang: &str, ext: Option<&str>) -> Option<&'static SyntaxReference> {
     let ss = syntax_set();
@@ -87,44 +80,46 @@ fn find_syntax(lang: &str, ext: Option<&str>) -> Option<&'static SyntaxReference
     let mapped = match lang {
         "rust" => "rs", "c" => "c", "cpp" => "cpp", "cs" => "cs", "java" => "java", "python" => "py", "javascript" => "js",
         "html" => "html", "css" => "css", "xml" => "xml", "json" => "json", "markdown" => "md", "shell" => "sh",
-        "batch" => "bat", "ini" => "ini", "sql" => "sql", "yaml" => "yaml", "slint" => "rs", _ => "",
+        "batch" => "bat", "ini" => "ini", "sql" => "sql", "yaml" => "yaml", "toml" => "toml", "slint" => "rs", _ => "",
     };
     by(mapped).or_else(|| ext.and_then(by)).filter(|s| s.name != "Plain Text")
 }
 
 impl Hl {
-    /// Bring cache in sync with `text` / language. Invalidates from first changed line.
-    pub fn sync(&mut self, text: &str, lang: &str, ext: Option<&str>, dark: bool) {
+    /// Select syntax/theme; resets the cache when either changes.
+    pub fn configure(&mut self, lang: &str, ext: Option<&str>, dark: bool) {
         let syn = find_syntax(lang, ext);
         let name = syn.map(|s| s.name.clone());
         if name != self.syntax || dark != self.dark {
             self.syntax = name; self.dark = dark; self.lines.clear(); self.states.clear();
             if let Some(s) = syn { self.states.push((ParseState::new(s), HighlightState::new(&Highlighter::new(theme(dark)), ScopeStack::new()))); }
-        } else if text != self.src {
-            let common = self.src.bytes().zip(text.bytes()).take_while(|(a, b)| a == b).count();
-            let line = self.src[..common.min(self.src.len())].matches('\n').count();
-            if self.lines.len() > line { self.lines.truncate(line); self.states.truncate(line + 1); }
         }
-        if text != self.src { self.src = text.to_string(); }
     }
 
-    pub fn active(&self) -> bool { self.syntax.is_some() }
+    /// Drop cached lines from `line` on (text changed there).
+    pub fn invalidate(&mut self, line: usize) {
+        if self.lines.len() > line { self.lines.truncate(line); self.states.truncate(line + 1); }
+    }
+
 
     /// Highlight lines until `upto` (exclusive) is cached, doing at most `budget` lines. Returns true if done.
-    pub fn work(&mut self, upto: usize, budget: usize) -> bool {
+    pub fn work(&mut self, rope: &Rope, upto: usize, budget: usize) -> bool {
         if self.syntax.is_none() { return true; }
-        let ss = syntax_set();
-        let hl = Highlighter::new(theme(self.dark));
+        let total = rope.len_lines();
+        let upto = upto.min(total);
         let start = self.lines.len();
         if start >= upto { return true; }
-        let mut done = 0;
-        for line in self.src.split_inclusive('\n').skip(start) {
-            if self.lines.len() >= upto || done >= budget { break; }
+        let ss = syntax_set();
+        let hl = Highlighter::new(theme(self.dark));
+        let mut line = String::new();
+        for i in start..upto.min(start + budget) {
+            line.clear();
+            for chunk in rope.line(i).chunks() { line.push_str(chunk); }
+            while line.ends_with('\n') || line.ends_with('\r') { line.pop(); }
+            line.push('\n');
             let (mut ps, mut hs) = self.states.last().cloned().unwrap();
-            let owned;
-            let l = if line.ends_with('\n') { line } else { owned = format!("{}\n", line); &owned };
-            let ops = ps.parse_line(l, ss).unwrap_or_default();
-            let toks = HighlightIterator::new(&mut hs, &ops, l, &hl)
+            let ops = ps.parse_line(&line, ss).unwrap_or_default();
+            let toks = HighlightIterator::new(&mut hs, &ops, &line, &hl)
                 .filter_map(|(st, t)| {
                     let t = t.trim_end_matches(['\n', '\r']);
                     if t.is_empty() { return None; }
@@ -134,34 +129,11 @@ impl Hl {
                 }).collect();
             self.lines.push(toks);
             self.states.push((ps, hs));
-            done += 1;
         }
-        // trailing empty line after final '\n' has no tokens
-        let total = self.src.split_inclusive('\n').count();
-        self.lines.len() >= upto.min(total)
+        self.lines.len() >= upto
     }
 
-    /// Build the model for visible lines [first, first+count).
-    pub fn visible(&self, first: usize, count: usize, fg: Color, marks: &[usize]) -> Vec<HlLine> {
-        let mut out = Vec::new();
-        let mut line_start = 0usize;
-        for (i, raw) in self.src.split('\n').enumerate() {
-            let ls = line_start;
-            line_start += raw.len() + 1;
-            if i < first { continue; }
-            if i >= first + count { break; }
-            let base: Vec<Tok> = match self.lines.get(i) {
-                Some(t) => t.clone(),
-                None if raw.is_empty() => vec![],
-                None => vec![Tok { text: raw.to_string(), color: fg, bold: false, italic: false }],
-            };
-            let lm: Vec<usize> = marks.iter().filter(|&&m| m >= ls && m < ls + raw.len()).map(|m| m - ls).collect();
-            let toks: Vec<HlToken> = split_marks(base, &lm).into_iter()
-                .map(|(t, bg)| HlToken { text: t.text.as_str().into(), color: t.color, bold: t.bold || bg, italic: t.italic, bg }).collect();
-            out.push(HlLine { line: i as i32, tokens: ModelRc::new(VecModel::from(toks)) });
-        }
-        out
-    }
+    pub fn line(&self, i: usize) -> Option<&[Tok]> { self.lines.get(i).map(|v| v.as_slice()) }
 }
 
 #[cfg(test)]
@@ -169,16 +141,23 @@ mod tests {
     use super::*;
     #[test]
     fn brackets() {
-        let t = "fn a() { [1, (2)] }";
+        let t = &Rope::from_str("fn a() { [1, (2)] }");
         assert_eq!(match_bracket(t, 7), Some((7, 18)));
         assert_eq!(match_bracket(t, 19), Some((18, 7)));
         assert_eq!(match_bracket(t, 5), Some((5, 4)));
     }
+}
+
+#[cfg(test)]
+mod toml_tests {
+    use super::*;
     #[test]
-    fn marks_split() {
-        let toks = vec![Tok { text: "ab(cd)".into(), color: Color::from_rgb_u8(0, 0, 0), bold: false, italic: false }];
-        let r = split_marks(toks, &[2, 5]);
-        let s: Vec<_> = r.iter().map(|(t, b)| (t.text.as_str(), *b)).collect();
-        assert_eq!(s, vec![("ab", false), ("(", true), ("cd", false), (")", true)]);
+    fn toml_is_highlighted() {
+        let mut h = Hl::default();
+        h.configure("toml", Some("toml"), false);
+        assert!(h.syntax.is_some());
+        let r = Rope::from_str("[package]\nname = \"x\" # c\n");
+        assert!(h.work(&r, 3, 10));
+        assert!(h.line(1).unwrap().len() >= 3);
     }
 }

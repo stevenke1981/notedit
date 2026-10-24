@@ -19,12 +19,14 @@ pub struct Settings {
     pub session: Vec<SessionFile>,
     pub session_cur: usize,
     pub macro_keys: Vec<String>,
+    pub docmap: bool,
+    pub autocomplete: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings { font: 14.0, font_family: "JetBrains Mono".into(), wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
-                   recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![] }
+                   recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![], docmap: false, autocomplete: true }
     }
 }
 

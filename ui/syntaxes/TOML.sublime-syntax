@@ -1,0 +1,60 @@
+%YAML 1.2
+---
+name: TOML
+file_extensions: [toml]
+scope: source.toml
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.toml
+    - match: '^\s*(\[\[?)([^\]]*)(\]\]?)'
+      captures:
+        1: punctuation.definition.table.toml
+        2: entity.name.section.toml
+        3: punctuation.definition.table.toml
+    - match: '"""'
+      push: ml_basic
+    - match: "'''"
+      push: ml_literal
+    - match: '"'
+      push: basic
+    - match: "'"
+      push: literal
+    - match: '\b(true|false|inf|nan)\b'
+      scope: constant.language.toml
+    - match: '\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?'
+      scope: constant.numeric.date.toml
+    - match: '[+-]?(0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*(\.\d[\d_]*)?([eE][+-]?\d+)?)\b'
+      scope: constant.numeric.toml
+    - match: '^\s*([A-Za-z0-9_.-]+|"[^"]*")\s*(=)'
+      captures:
+        1: entity.name.tag.toml
+        2: keyword.operator.assignment.toml
+    - match: '([A-Za-z0-9_-]+)\s*(=)'
+      captures:
+        1: entity.name.tag.toml
+        2: keyword.operator.assignment.toml
+  basic:
+    - meta_scope: string.quoted.double.toml
+    - match: '\\.'
+      scope: constant.character.escape.toml
+    - match: '"'
+      pop: true
+    - match: '$'
+      pop: true
+  literal:
+    - meta_scope: string.quoted.single.toml
+    - match: "'"
+      pop: true
+    - match: '$'
+      pop: true
+  ml_basic:
+    - meta_scope: string.quoted.triple.toml
+    - match: '\\.'
+      scope: constant.character.escape.toml
+    - match: '"""'
+      pop: true
+  ml_literal:
+    - meta_scope: string.quoted.triple.toml
+    - match: "'''"
+      pop: true
