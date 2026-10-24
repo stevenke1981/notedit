@@ -131,3 +131,30 @@ mod tests {
         fs::remove_dir_all(d).unwrap();
     }
 }
+
+/// `fs::canonicalize` without the Windows verbatim prefix (`\\?\C:\x` → `C:\x`,
+/// `\\?\UNC\srv\share` → `\\srv\share`), so paths shown in titles, recent lists
+/// and the session stay readable and compare equal to paths typed by users.
+pub fn canon(p: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(p).map(|c| PathBuf::from(strip_verbatim(&c.to_string_lossy())))
+}
+
+pub fn strip_verbatim(s: &str) -> String {
+    if let Some(r) = s.strip_prefix(r"\\?\UNC\") { return format!(r"\\{r}"); }
+    if let Some(r) = s.strip_prefix(r"\\?\") {
+        if r.as_bytes().get(1) == Some(&b':') { return r.to_string(); }
+    }
+    s.to_string()
+}
+
+#[cfg(test)]
+mod canon_tests {
+    #[test]
+    fn verbatim_prefix() {
+        use super::strip_verbatim as s;
+        assert_eq!(s(r"\\?\C:\Users\a.txt"), r"C:\Users\a.txt");
+        assert_eq!(s(r"\\?\UNC\srv\share\f"), r"\\srv\share\f");
+        assert_eq!(s("/home/a"), "/home/a");
+        assert_eq!(s(r"\\?\Volume{x}\f"), r"\\?\Volume{x}\f");
+    }
+}

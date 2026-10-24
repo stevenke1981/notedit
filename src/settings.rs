@@ -1,5 +1,6 @@
 //! Persistent settings + session (JSON in the user config directory).
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -25,12 +26,22 @@ pub struct Settings {
     pub spell_ignore: Vec<String>,
     /// keep the caret line vertically centred
     pub typewriter: bool,
+    /// sidebar shown at start: 0 none, 1 folder workspace, 2 function list
+    pub sidebar: u8,
+    pub workspace: Option<PathBuf>,
+    pub workspace_expanded: Vec<PathBuf>,
+    /// colour overrides, e.g. {"editor-bg": "#fdf6e3", "sel": "#eee8d5"}
+    pub theme_light: BTreeMap<String, String>,
+    pub theme_dark: BTreeMap<String, String>,
+    /// action → shortcut, e.g. {"wordcount": "Ctrl+Shift+W", "compare": "Alt+F5"}
+    pub keys: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings { font: 14.0, font_family: "JetBrains Mono".into(), wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
-                   recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![], docmap: false, autocomplete: true, spell: false, spell_ignore: vec![], typewriter: false }
+                   recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![], docmap: false, autocomplete: true, spell: false, spell_ignore: vec![], typewriter: false,
+                   sidebar: 0, workspace: None, workspace_expanded: vec![], theme_light: BTreeMap::new(), theme_dark: BTreeMap::new(), keys: BTreeMap::new() }
     }
 }
 
@@ -42,7 +53,7 @@ pub fn config_dir() -> PathBuf {
     base.unwrap_or_else(std::env::temp_dir).join("notedit")
 }
 
-fn file() -> PathBuf { std::env::var_os("NOTEDIT_CONFIG").map(PathBuf::from).unwrap_or_else(|| config_dir().join("settings.json")) }
+pub fn file() -> PathBuf { std::env::var_os("NOTEDIT_CONFIG").map(PathBuf::from).unwrap_or_else(|| config_dir().join("settings.json")) }
 
 impl Settings {
     pub fn load() -> Self {

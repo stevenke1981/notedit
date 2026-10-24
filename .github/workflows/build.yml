@@ -34,11 +34,35 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgtk-3-dev
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgtk-3-dev xvfb
       - name: Test
         run: cargo test --release --locked
       - name: Build
         run: cargo build --release --locked
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo '{"restore_session":false}' > "$RUNNER_TEMP/cfg.json"
+          NOTEDIT_CONFIG="$RUNNER_TEMP/cfg.json" timeout 60 xvfb-run -a target/release/notedit --smoke-test "$RUNNER_TEMP/smoke.txt" src/workspace.rs
+          cat "$RUNNER_TEMP/smoke.txt"; grep -q NOTEDIT_SMOKE_OK "$RUNNER_TEMP/smoke.txt"
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          echo '{"restore_session":false}' > "$RUNNER_TEMP/cfg.json"
+          NOTEDIT_CONFIG="$RUNNER_TEMP/cfg.json" target/release/notedit --smoke-test "$RUNNER_TEMP/smoke.txt" src/workspace.rs &
+          p=$!; for i in $(seq 60); do kill -0 $p 2>/dev/null || break; sleep 1; done; kill $p 2>/dev/null || true
+          cat "$RUNNER_TEMP/smoke.txt"; grep -q NOTEDIT_SMOKE_OK "$RUNNER_TEMP/smoke.txt"
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          '{"restore_session":false}' | Set-Content "$env:RUNNER_TEMP\cfg.json"
+          $env:NOTEDIT_CONFIG = "$env:RUNNER_TEMP\cfg.json"
+          $p = Start-Process -FilePath target\release\notedit.exe -ArgumentList "--smoke-test","$env:RUNNER_TEMP\smoke.txt","src\workspace.rs" -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "smoke test timed out" }
+          Get-Content "$env:RUNNER_TEMP\smoke.txt"
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern NOTEDIT_SMOKE_OK -Quiet)) { throw "smoke test failed" }
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

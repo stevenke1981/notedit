@@ -1,6 +1,9 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 slint::include_modules!();
 mod preview;
+mod dlg;
+mod workspace;
+mod panels;
 mod highlight;
 mod search;
 mod fmt;
@@ -56,6 +59,8 @@ struct Doc {
     words: (u64, BTreeSet<String>),
     fold_cache: RefCell<(u64, HashMap<usize, Option<usize>>)>,
     hex: Option<Box<hexview::HexState>>,
+    /// compare result: (buffer version it was computed for, line → 1 added / 2 removed / 3 changed, hunk start lines)
+    diff: Option<(u64, HashMap<usize, u8>, Vec<usize>)>,
 }
 
 impl Doc {
@@ -63,7 +68,7 @@ impl Doc {
         Doc { path: None, title: format!("new {}", n), buf: Default::default(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
               encoding: encoding_rs::UTF_8, bom: false, modified: false, saved: Some(Default::default()), lang: "text".into(), hl: Default::default(), cursor: 0, disk_stamp: None,
               folds: BTreeSet::new(), folds_ver: 0, bookmarks: BTreeSet::new(), sels: vec![Sel::caret(0)], top: 0, words: (0, BTreeSet::new()),
-              fold_cache: Default::default(), hex: None }
+              fold_cache: Default::default(), hex: None, diff: None }
     }
     fn text(&self) -> String { self.buf.text() }
     fn set_loaded(&mut self, text: &str) {
@@ -157,6 +162,12 @@ struct State {
     /// (file, .bak) pairs written by the last Replace in Files
     rif_backups: Vec<(PathBuf, PathBuf)>,
     rif: Option<madops::RifJob>,
+    side_mode: u8,
+    side_root: Option<PathBuf>,
+    side_expanded: std::collections::HashSet<PathBuf>,
+    side_rows: Vec<workspace::TreeRow>,
+    side_syms: Vec<workspace::Symbol>,
+    side_sym_key: (usize, u64),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -253,7 +264,7 @@ fn recent_items(st: &State) -> Vec<MenuItem> {
 }
 
 fn build_menus(st: &State) -> Vec<Menu> {
-    let d = &st.docs[st.cur];
+    let d = &st.docs[st.views[st.view_idx()].doc];
     let menu = |t: &str, items: Vec<MenuItem>| Menu { title: t.into(), items: ModelRc::new(VecModel::from(items)) };
     let mut lang_items: Vec<MenuItem> = LANGS.iter().map(|l| chk(l.0, "", &format!("lang:{}", l.0), d.lang == l.0)).collect();
     lang_items.insert(1, sep());
@@ -261,8 +272,8 @@ fn build_menus(st: &State) -> Vec<Menu> {
     for (i, doc) in st.docs.iter().enumerate() {
         win_items.push(chk(&format!("{}: {}", i + 1, doc.title), "", &format!("tab:{}", i), i == st.cur));
     }
-    vec![
-        menu("檔案", vec![mi("開新檔案", "Ctrl+N", "new"), mi("開啟舊檔...", "Ctrl+O", "open"), mi("重新載入", "", "reload"), sep(),
+    let mut menus = vec![
+        menu("檔案", vec![mi("開新檔案", "Ctrl+N", "new"), mi("開啟舊檔...", "Ctrl+O", "open"), mi("開啟資料夾作為工作區...", "", "openworkspace"), mi("重新載入", "", "reload"), sep(),
             mi("儲存檔案", "Ctrl+S", "save"), mi("另存新檔...", "Ctrl+Shift+S", "saveas"), mi("全部儲存", "", "saveall"), sep(),
             mi("關閉", "Ctrl+W", "close"), mi("全部關閉", "", "closeall"), mi("關閉其他分頁", "", "closeothers"), sep(),
             mi("匯出為 HTML...", "", "exporthtml"), mi("列印 (以瀏覽器)...", "Ctrl+P", "print"), sep()]
@@ -287,8 +298,8 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi("切換書籤", "Ctrl+F2", "bookmark"), mi("下一個書籤", "F2", "nextbm"), mi("上一個書籤", "Shift+F2", "prevbm"), mi("清除所有書籤", "", "clearbm")]),
         menu("檢視", vec![chk("文字模式", "", "textmode", d.hex.is_none() && !st.column_mode), chk("欄模式", "Alt+C", "columnmode", d.hex.is_none() && st.column_mode),
             chk("十六進位模式", "Alt+H", "hexmode", d.hex.is_some()), chk("拼字檢查 (英文，純文字/Markdown)", "", "spell", st.cfg.spell), sep(),chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers),
-            chk("HTML / Markdown 預覽", "", "preview", st.preview), chk("文件地圖", "", "docmap", st.docmap), sep(),
-            chk("分割檢視 (複製文件到另一個檢視)", "", "split", st.split), en("切換到另一個檢視", "F8", "otherview", st.split), sep(),
+            chk("HTML / Markdown 預覽", "", "preview", st.preview), chk("文件地圖", "", "docmap", st.docmap), chk("資料夾工作區", "", "side:1", st.side_mode == 1), chk("函式清單", "", "side:2", st.side_mode == 2), sep(),
+            chk("分割檢視 (點分頁可在右側開啟其他文件)", "", "split", st.split), en("切換到另一個檢視", "F8", "otherview", st.split), sep(),
             mi("摺疊 / 展開目前區塊", "Ctrl+Alt+F", "foldcur"), mi("全部摺疊", "Alt+0", "foldall"), mi("全部展開", "Alt+Shift+0", "unfoldall"), sep(),
             chk("深色主題", "", "dark", st.dark), sep(),
             mi("放大", "Ctrl++", "zoomin"), mi("縮小", "Ctrl+-", "zoomout"), mi("恢復預設縮放", "Ctrl+0", "zoomreset")]),
@@ -299,16 +310,26 @@ fn build_menus(st: &State) -> Vec<Menu> {
         menu("語言", lang_items),
         menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("打字機模式 (游標行置中)", "", "typewriter", st.cfg.typewriter), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
-            mi("開啟設定檔所在資料夾", "", "openconfig"), sep()]
+            mi("編輯佈景主題色彩 / 快捷鍵 (settings.json)...", "", "editconfig"), mi("開啟設定檔所在資料夾", "", "openconfig"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
-        menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime")]),
+        menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
+            mi("比較兩個檔案 (左：目前 / 右：分割檢視或選擇檔案)", "", "compare"), en("下一個差異", "F7", "diffnext", st.docs[st.views[0].doc].diff.is_some()), en("上一個差異", "Shift+F7", "diffprev", st.docs[st.views[0].doc].diff.is_some()),
+            en("重新比較", "", "recompare", st.docs[st.views[0].doc].diff.is_some()), en("結束比較", "", "compareclear", st.docs.iter().any(|d| d.diff.is_some()))]),
         menu("巨集", vec![chk(if st.macro_rec { "停止錄製" } else { "開始錄製" }, "Ctrl+Shift+R", "macrorec", st.macro_rec),
             mi(&format!("播放 ({} 個動作)", st.macro_buf.len()), "Ctrl+Shift+P", "macroplay"), mi("重複播放 10 次", "", "macroplay10"), mi("清除巨集", "", "macroclear")]),
         menu("執行", vec![mi("在預設瀏覽器中開啟", "", "runbrowser"), mi("開啟所在資料夾", "", "openfolder")]),
         menu("外掛", vec![mi("(尚無外掛)", "", "none")]),
         menu("視窗", win_items),
         menu("?", vec![mi("關於 NotEdit...", "F1", "about")]),
-    ]
+    ];
+    // show user-defined shortcuts in the menus
+    if !st.cfg.keys.is_empty() {
+        for m in &mut menus {
+            let items: Vec<MenuItem> = m.items.iter().map(|mut it| { if let Some(k) = st.cfg.keys.get(it.action.as_str()) { it.shortcut = panels::norm_combo(k).into(); } it }).collect();
+            m.items = ModelRc::new(VecModel::from(items));
+        }
+    }
+    menus
 }
 
 /// Width of a tab button (kept in Rust so drop targets can be computed exactly).
@@ -336,6 +357,7 @@ impl App {
     fn refresh_all(&self) {
         { let mut st = self.st.borrow_mut(); st.load_view0(); }
         self.refresh_meta();
+        self.side_refresh();
         self.refresh_preview();
         self.render_all();
         self.ui().invoke_focus_editor();
@@ -349,6 +371,7 @@ impl App {
         st.cfg.font = st.font; st.cfg.font_family = st.font_family.clone(); st.cfg.wrap = st.wrap; st.cfg.line_numbers = st.line_numbers; st.cfg.dark = st.dark; st.cfg.preview = st.preview;
         st.cfg.macro_keys = st.macro_buf.clone();
         st.cfg.docmap = st.docmap; st.cfg.autocomplete = st.autocomplete;
+        st.cfg.sidebar = st.side_mode; st.cfg.workspace = st.side_root.clone(); st.cfg.workspace_expanded = st.side_expanded.iter().cloned().collect();
         st.cfg.session = st.docs.iter().filter_map(|d| d.path.clone().map(|p| settings::SessionFile { path: p, cursor: d.cursor })).collect();
         st.cfg.session_cur = st.docs[..st.cur].iter().filter(|d| d.path.is_some()).count();
         if let Err(e) = st.cfg.save() {
@@ -398,7 +421,7 @@ impl App {
             }
         };
 
-        let answer = rfd::MessageDialog::new()
+        let answer = crate::dlg::msg()
             .set_title("NotEdit")
             .set_description(format!("偵測到上次未正常關閉留下的 {} 個未儲存文件。\n\n是否復原？復原內容只會先放回編輯器，不會自動覆寫原檔。", session.docs.len()))
             .set_buttons(rfd::MessageButtons::YesNo)
@@ -412,7 +435,7 @@ impl App {
 
         let mut st = self.st.borrow_mut();
         for rd in session.docs {
-            let normalized_path = rd.path.map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+            let normalized_path = rd.path.map(|p| crate::file_io::canon(&p).unwrap_or(p));
             let mut d = Doc::new(0);
             d.path = normalized_path.clone();
             // Keep the stamp from the moment the recovery snapshot was made.
@@ -458,13 +481,14 @@ impl App {
     fn refresh_meta(&self) {
         let ui = self.ui();
         let st = self.st.borrow();
-        let d = &st.docs[st.cur];
-        let tabs: Vec<TabInfo> = st.docs.iter().enumerate().map(|(i, d)| TabInfo { title: d.title.clone().into(), modified: d.modified, w: tab_width(&d.title, i == st.cur) }).collect();
+        let shown = st.views[st.view_idx()].doc.min(st.docs.len() - 1);
+        let d = &st.docs[shown];
+        let tabs: Vec<TabInfo> = st.docs.iter().enumerate().map(|(i, d)| TabInfo { title: d.title.clone().into(), modified: d.modified, w: tab_width(&d.title, i == shown) }).collect();
         // only replace the model when it really changed (keeps tab TouchAreas alive during drags)
         let model = ui.get_tabs();
         let same = model.row_count() == tabs.len() && tabs.iter().enumerate().all(|(i, t)| model.row_data(i).as_ref() == Some(t));
         if !same { ui.set_tabs(ModelRc::new(VecModel::from(tabs))); }
-        ui.set_current_tab(st.cur as i32);
+        ui.set_current_tab(shown as i32);
         ui.set_menus(ModelRc::new(VecModel::from(build_menus(&st))));
         let name = d.path.as_ref().map(|p| p.display().to_string()).unwrap_or(d.title.clone());
         ui.set_window_title(format!("{}{} - NotEdit", if d.modified { "*" } else { "" }, name).into());
@@ -526,7 +550,7 @@ impl App {
             } else {
                 format!("「{}」已被其他程式修改。\n\n是否重新載入磁碟上的新版本？", title)
             };
-            let answer = rfd::MessageDialog::new()
+            let answer = crate::dlg::msg()
                 .set_title("NotEdit")
                 .set_description(description)
                 .set_buttons(rfd::MessageButtons::YesNo)
@@ -567,8 +591,8 @@ impl App {
 
     fn open_path(&self, path: PathBuf) {
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let already = { let cp = std::fs::canonicalize(&path).unwrap_or(path.clone()); self.st.borrow().docs.iter().position(|d| d.path.as_ref() == Some(&cp)) };
-        if let Some(i) = already { self.remember_cursor(); self.st.borrow_mut().cur = i; self.refresh_all(); return; }
+        let already = { let cp = crate::file_io::canon(&path).unwrap_or(path.clone()); self.st.borrow().docs.iter().position(|d| d.path.as_ref() == Some(&cp)) };
+        if let Some(i) = already { self.remember_cursor(); self.st.borrow_mut().cur = i; if !self.show_in_split_view() { self.refresh_all(); } return; }
         // binary or huge files open in hex mode (memory-mapped when large)
         let sample = { use std::io::Read; let mut b = vec![0u8; 8192]; std::fs::File::open(&path).and_then(|mut f| f.read(&mut b)).map(|n| { b.truncate(n); b }).unwrap_or_default() };
         if size > HUGE_TEXT || hex::looks_binary(&sample) {
@@ -583,7 +607,7 @@ impl App {
         let eol = detect_eol(&s);
         let text = s.replace("\r\n", "\n").replace('\r', "\n");
         self.remember_cursor();
-        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let path = crate::file_io::canon(&path).unwrap_or(path);
         {
             let mut st = self.st.borrow_mut();
             st.cfg.add_recent(path.clone());
@@ -600,12 +624,13 @@ impl App {
                 if matches!(st.docs[st.cur].lang.as_str(), "markdown" | "html") { st.preview = true; }
             }
         }
+        if self.show_in_split_view() { return; }
         self.refresh_all();
     }
 
     fn open_hex(&self, path: PathBuf, buf: hex::HexBuf) {
         self.remember_cursor();
-        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let path = crate::file_io::canon(&path).unwrap_or(path);
         {
             let mut st = self.st.borrow_mut();
             st.cfg.add_recent(path.clone());
@@ -669,7 +694,7 @@ impl App {
             let d = &st.docs[idx];
             match (&d.path, save_as) {
                 (Some(p), false) => Some(p.clone()),
-                _ => rfd::FileDialog::new().set_title("另存新檔").set_file_name(&d.title).save_file(),
+                _ => crate::dlg::file().set_title("另存新檔").set_file_name(&d.title).save_file(),
             }
         };
         let Some(path) = path else { return false };
@@ -683,6 +708,7 @@ impl App {
         };
         if let Err(e) = file_io::durable_write(&path, &bytes) { msg(&format!("儲存失敗：{}", e)); return false; }
         }
+        let saved_path: Option<PathBuf>;
         {
             let mut st = self.st.borrow_mut();
             let d = &mut st.docs[idx];
@@ -692,11 +718,13 @@ impl App {
             d.disk_stamp = file_watch::stamp(&path).ok();
             d.modified = false;
             d.saved = if d.hex.is_none() { Some(d.buf.rope.clone()) } else { None };
-            st.cfg.add_recent(path);
+            st.cfg.add_recent(path.clone());
+            saved_path = Some(path);
         }
         self.refresh_meta();
         self.refresh_preview();
         self.persist_recovery();
+        if let Some(p) = saved_path { self.reload_user_config(&p); }
         true
     }
 
@@ -704,7 +732,7 @@ impl App {
     fn close(&self, idx: usize) -> bool {
         let (modified, title) = { let st = self.st.borrow(); (st.docs[idx].modified, st.docs[idx].title.clone()) };
         if modified {
-            let r = rfd::MessageDialog::new().set_title("NotEdit").set_description(format!("是否儲存「{}」的變更？", title))
+            let r = crate::dlg::msg().set_title("NotEdit").set_description(format!("是否儲存「{}」的變更？", title))
                 .set_buttons(rfd::MessageButtons::YesNoCancel).show();
             match r {
                 rfd::MessageDialogResult::Yes => { if !self.save(idx, false) { return false; } }
@@ -728,7 +756,36 @@ impl App {
         true
     }
 
+    /// After open_path picked `st.cur`: when the split view is active, show that
+    /// document there and give the main view back its previous document.
+    fn show_in_split_view(&self) -> bool {
+        let (split, active, cur, v0) = { let st = self.st.borrow(); (st.split, st.active, st.cur, st.views[0].doc) };
+        if !(split && active == 1) { return false; }
+        { let mut st = self.st.borrow_mut(); st.cur = v0.min(st.docs.len() - 1); }
+        self.select_tab(cur);
+        true
+    }
+
     fn select_tab(&self, i: usize) {
+        let (split, active) = { let st = self.st.borrow(); (st.split, st.active) };
+        if split && active == 1 {
+            // the split (right) view can show any document, independent of the main view
+            {
+                let mut st = self.st.borrow_mut();
+                if i >= st.docs.len() { return; }
+                let old = st.views[1].doc;
+                if old != st.views[0].doc { let (sels, top) = (st.views[1].sels.clone(), st.views[1].top); if let Some(d) = st.docs.get_mut(old) { d.sels = sels; d.top = top; } }
+                let d = &st.docs[i];
+                let len = d.buf.len();
+                let sels: Vec<Sel> = d.sels.iter().map(|s| Sel::new(s.anchor.min(len), s.head.min(len))).collect();
+                let top = d.top;
+                let v = &mut st.views[1];
+                v.doc = i; v.sels = if sels.is_empty() { vec![Sel::caret(0)] } else { sels }; v.primary = 0; v.top = top;
+                v.sx = 0.0; v.max_w = 0.0; v.ac = None; v.follow = true; v.drag = Drag::None; v.lkey = (usize::MAX, 0, 0, 0, false);
+            }
+            self.refresh_meta(); self.refresh_preview(); self.render_all(); self.side_refresh(); self.ui().invoke_focus_editor();
+            return;
+        }
         self.remember_cursor();
         { let mut st = self.st.borrow_mut(); if i >= st.docs.len() { return; } st.cur = i; }
         self.refresh_all();
@@ -837,7 +894,7 @@ impl App {
                     let p = std::env::temp_dir().join(format!("notedit-print-{}.html", std::process::id()));
                     Some(p)
                 } else {
-                    let mut dlg = rfd::FileDialog::new().set_title("匯出為 HTML").set_file_name(format!("{}.html", title)).add_filter("HTML", &["html"]);
+                    let mut dlg = crate::dlg::file().set_title("匯出為 HTML").set_file_name(format!("{}.html", title)).add_filter("HTML", &["html"]);
                     if let Some(dir) = path.as_ref().and_then(|p| p.parent()) { dlg = dlg.set_directory(dir); }
                     dlg.save_file()
                 };
@@ -989,7 +1046,7 @@ impl App {
         match a {
             "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
-                if let Some(files) = rfd::FileDialog::new().set_title("開啟舊檔")
+                if let Some(files) = crate::dlg::file().set_title("開啟舊檔")
                     .add_filter("所有檔案", &["*"]).add_filter("文字/程式碼", &["txt", "md", "html", "htm", "rs", "py", "js", "json", "xml", "css", "c", "cpp", "h", "toml", "ini", "log"])
                     .pick_files() { for f in files { self.open_path(f); } }
             }
@@ -1003,6 +1060,15 @@ impl App {
             "exit" => { if self.confirm_exit() { let _ = slint::quit_event_loop(); } }
             "undo" | "redo" | "gotobrace" | "print" | "exporthtml" | "bookmark" | "nextbm" | "prevbm" | "clearbm" | "zoomin" | "zoomout" => self.action_plain(a),
             "split" => self.toggle_split(),
+            "openworkspace" => self.side_open_folder(),
+            "side:1" => { let m = if self.st.borrow().side_mode == 1 { 0 } else { 1 }; self.side_switch(m); }
+            "side:2" => { let m = if self.st.borrow().side_mode == 2 { 0 } else { 2 }; self.side_switch(m); }
+            "compare" => self.compare(),
+            "recompare" => { self.recompare(); self.render_all(); }
+            "compareclear" => self.compare_clear(),
+            "diffnext" => self.diff_nav(true, false),
+            "diffprev" => self.diff_nav(false, false),
+            "editconfig" => self.edit_user_config(),
             "otherview" => { let split = self.st.borrow().split; if split { let o = 1 - self.av(); self.st.borrow_mut().active = o; self.refresh_meta(); self.render_all(); ui.invoke_focus_editor(); } }
             "docmap" => { { let mut st = self.st.borrow_mut(); st.docmap = !st.docmap; } self.refresh_meta(); self.persist(); }
             "typewriter" => { { let mut st = self.st.borrow_mut(); st.cfg.typewriter = !st.cfg.typewriter; for v in st.views.iter_mut() { v.follow = true; } } self.persist(); self.refresh_meta(); self.render_all(); }
@@ -1015,7 +1081,7 @@ impl App {
                 self.toggle_fold(vi, line);
             }
             "findall" => { ui.set_find_visible(true); if !ui.get_find_text().is_empty() { self.find_all(); } }
-            "dark" => { { let mut st = self.st.borrow_mut(); st.dark = !st.dark; } self.refresh_meta(); self.persist(); }
+            "dark" => { { let mut st = self.st.borrow_mut(); st.dark = !st.dark; } self.apply_theme(); self.refresh_meta(); self.persist(); }
             "restoresession" => { { let mut st = self.st.borrow_mut(); st.cfg.restore_session = !st.cfg.restore_session; } self.refresh_meta(); self.persist(); }
             x if x.starts_with("ctx:") => self.ctx_action(&x[4..]),
             "delete" => { let vi = self.av(); let edits: Vec<_> = self.st.borrow().views[vi].sels.iter().map(|s| (s.start(), s.end(), String::new())).collect(); self.apply_edits(vi, edits, EditKind::Other, true); }
@@ -1695,12 +1761,13 @@ impl App {
 
     /// Returns true when the key was consumed by the editor.
     fn ed_key(&self, vi: usize, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        if self.custom_key(text, ctrl, shift, alt) { return true; }
         if self.is_hex(vi) { let h = self.hex_key(vi, text, ctrl, shift, alt); if h { self.refresh_status(); } return h; }
         // column mode: Shift+arrows make a rectangular selection (like Alt+Shift)
         let alt = alt || (shift && !ctrl && self.st.borrow().column_mode && text.chars().next().is_some_and(|c| [K_LEFT, K_RIGHT, K_UP, K_DOWN, K_HOME, K_END].contains(&c)));
         let handled = self.ed_key_inner(vi, text, ctrl, shift, alt);
         let lk = text.to_ascii_lowercase();
-        let via_action = (alt && !ctrl && matches!(lk.as_str(), "0" | ")" | "h" | "c")) || (alt && ctrl && lk == "f") || (text == "\u{f70b}" && !ctrl && !alt);
+        let via_action = (alt && !ctrl && matches!(lk.as_str(), "0" | ")" | "h" | "c")) || (alt && ctrl && lk == "f") || ((text == "\u{f70b}" || text == "\u{f70a}") && !ctrl && !alt);
         if handled && !via_action { self.record(format!("k:{}{}{}:{}", ctrl as u8, shift as u8, alt as u8, text)); self.refresh_status(); }
         handled
     }
@@ -1727,6 +1794,7 @@ impl App {
         };
         if alt && !ctrl && matches!(k, '0' | ')') { run(if shift || k == ')' { "unfoldall" } else { "foldall" }); return true; }
         if alt && ctrl && lk == 'f' { run("foldcur"); return true; }
+        if k == '\u{f70a}' && !ctrl && !alt { run(if shift { "diffprev" } else { "diffnext" }); return true; }
         if k == '\u{f70b}' && !ctrl && !alt { run("otherview"); return true; }
         if alt && !ctrl && (lk == 'h' || lk == 'c') { run(if lk == 'c' { "columnmode" } else { "hexmode" }); return true; }
         if alt && !ctrl && !k.is_control() && (k as u32) < 0xf700 { return true; }
@@ -1847,7 +1915,7 @@ impl App {
             }
         };
         self.apply_edits(vi, edits, EditKind::Other, true);
-        self.st.borrow_mut().docs[self.st.borrow().views[vi].doc].buf.break_group();
+        { let mut st = self.st.borrow_mut(); let d = st.views[vi].doc; st.docs[d].buf.break_group(); }
     }
 
     fn delete(&self, vi: usize, forward: bool, word: bool) {
@@ -2270,6 +2338,7 @@ impl App {
                 num: if row.start == 0 { (row.line + 1).to_string().into() } else { SharedString::new() },
                 line: row.line as i32, fold, cur: row.line == head_line,
                 mark: row.start == 0 && d.bookmarks.contains(&row.line),
+                diff: d.diff.as_ref().filter(|x| x.0 == d.buf.version).and_then(|x| x.1.get(&row.line)).map(|&k| k as i32).unwrap_or(0),
                 toks: ModelRc::new(VecModel::from(toks)), rects: ModelRc::new(VecModel::from(rects)),
             });
         }
@@ -2339,6 +2408,7 @@ impl App {
 
     /// Status bar for the active view.
     fn refresh_status(&self) {
+        if self.st.borrow().side_mode == 2 { self.side_refresh(); }
         let ui = self.ui();
         if let Some(s) = self.hex_status() { ui.set_st_pos(s.into()); return; }
         let st = self.st.borrow();
@@ -2543,17 +2613,20 @@ fn open_external(p: &std::path::Path) {
 }
 
 fn msg(s: &str) {
-    rfd::MessageDialog::new().set_title("NotEdit").set_description(s).set_buttons(rfd::MessageButtons::Ok).show();
+    crate::dlg::msg().set_title("NotEdit").set_description(s).set_buttons(rfd::MessageButtons::Ok).show();
 }
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
+    dlg::set_main(ui.as_weak());
     let cfg = settings::Settings::load();
     let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: cfg.font.clamp(6.0, 48.0), wrap: cfg.wrap, line_numbers: cfg.line_numbers,
         preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
         hits: vec![], font_family: if cfg.font_family.trim().is_empty() { "JetBrains Mono".into() } else { cfg.font_family.clone() },
         font_choices: detect_fonts(), ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete,
-        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), rif_backups: vec![], rif: None, cfg };
+        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), rif_backups: vec![], rif: None,
+        side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
+        side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
     let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
@@ -2583,6 +2656,14 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let a = app.clone();
         ui.on_tab_target(move |from: i32, dx: f32| a.tab_target(from.max(0) as usize, dx));
+    }
+    cb!(on_side_click, |a, i: i32| { a.side_click(i.max(0) as usize) });
+    cb!(on_side_activate, |a, i: i32| { a.side_activate(i.max(0) as usize) });
+    cb!(on_side_switch, |a, m: i32| { a.side_switch(m) });
+    cb!(on_side_open_folder, |a| { a.side_open_folder() });
+    {
+        let a = app.clone();
+        ui.on_custom_key(move |t: SharedString, c: bool, s: bool, al: bool| a.custom_key(&t, c, s, al));
     }
     cb!(on_tab_selected, |a, i: i32| { a.select_tab(i as usize) });
     cb!(on_tab_close, |a, i: i32| { a.close(i as usize); });
@@ -2618,12 +2699,15 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     // open files passed on command line, otherwise restore last session
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--smoke-test <out-file>`: start the full UI, open the given files, write a
+    // short report and quit (used by CI on Windows/macOS/Linux; no console needed).
+    let smoke: Option<PathBuf> = args.iter().position(|a| a == "--smoke-test").map(|i| { args.remove(i); if i < args.len() { PathBuf::from(args.remove(i)) } else { PathBuf::from("notedit-smoke.txt") } });
     if args.is_empty() && app.st.borrow().cfg.restore_session {
         let (files, sel) = { let st = app.st.borrow(); (st.cfg.session.clone(), st.cfg.session_cur) };
         for f in files.iter().filter(|f| f.path.exists()) { app.open_path(f.path.clone()); }
         for f in &files {
-            let p = std::fs::canonicalize(&f.path).unwrap_or(f.path.clone());
+            let p = crate::file_io::canon(&f.path).unwrap_or(f.path.clone());
             let mut st = app.st.borrow_mut();
             if let Some(d) = st.docs.iter_mut().find(|d| d.path.as_ref() == Some(&p)) {
                 let t = d.text();
@@ -2635,7 +2719,8 @@ fn main() -> Result<(), slint::PlatformError> {
         app.st.borrow_mut().cur = sel.min(n - 1);
     }
     for arg in args { app.open_path(PathBuf::from(arg)); }
-    app.restore_recovery();
+    if smoke.is_none() { app.restore_recovery(); } // a modal recovery prompt would block the smoke test
+    app.apply_theme();
     app.refresh_all();
 
     // drag & drop files from the OS
@@ -2671,5 +2756,22 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let a2 = app.clone();
     ui.window().on_close_requested(move || if a2.confirm_exit() { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown });
+    let _smoke_timer = slint::Timer::default();
+    if let Some(out) = smoke {
+        let a = app.clone();
+        _smoke_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(1500), move || {
+            let ui = a.ui();
+            a.action("side:2");
+            let report = {
+                let st = a.st.borrow();
+                let sz = ui.window().size();
+                format!("NOTEDIT_SMOKE_OK version={} docs={} first={} lines={} symbols={} window={}x{} scale={}\n",
+                    env!("CARGO_PKG_VERSION"), st.docs.len(), st.docs[0].title, st.docs[0].buf.rope.len_lines(), st.side_syms.len(),
+                    sz.width, sz.height, ui.window().scale_factor())
+            };
+            let _ = std::fs::write(&out, report);
+            let _ = slint::quit_event_loop();
+        });
+    }
     ui.run()
 }

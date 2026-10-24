@@ -1,6 +1,6 @@
 import { Button, LineEdit, CheckBox, ScrollView, ListView } from "std-widgets.slint";
-import { EditorView, EdState } from "editor.slint";
-export { EdState, EdTok, EdRect, EdRow, EdCaret, MapLine } from "editor.slint";
+import { EditorView, EdState, Theme } from "editor.slint";
+export { Theme, EdState, EdTok, EdRect, EdRow, EdCaret, MapLine } from "editor.slint";
 import "fonts/DejaVuSansMono.ttf";
 import "fonts/DejaVuSansMono-Bold.ttf";
 import "fonts/JetBrainsMono-Regular.ttf";
@@ -11,6 +11,7 @@ export struct SearchHit { doc: int, title: string, line: int, start: int, end: i
 export struct MenuItem { label: string, shortcut: string, action: string, separator: bool, checked: bool, enabled: bool }
 export struct Menu { title: string, items: [MenuItem] }
 export struct TabInfo { title: string, modified: bool, w: length }
+export struct SideItem { text: string, indent: int, kind: int, line: int }
 export struct Block { text: string, kind: int, indent: int, bold: bool, italic: bool, code: bool, link: bool }
 
 component ToolBtn inherits Rectangle {
@@ -109,22 +110,32 @@ export component AppWindow inherits Window {
     in-out property <bool> rename-visible: false;
     in-out property <string> rename-text;
     property <length> ctx-x; property <length> ctx-y;
-    property <color> c-chrome: dark ? #2b2b2b : #f0f0f0;
-    property <color> c-menu: dark ? #252526 : #f5f6f7;
-    property <color> c-fg: dark ? #dcdcdc : #1e1e1e;
-    property <color> c-editor: dark ? #1e1e1e : #ffffff;
-    property <color> c-gutter: dark ? #2d2d30 : #e4e4e4;
-    property <color> c-gutter-fg: dark ? #858585 : #808080;
-    property <color> c-curline: dark ? #2a2d3e : #e8f2fe;
-    property <color> c-tabbar: dark ? #333337 : #e8e8e8;
-    property <color> c-tab: dark ? #3c3c3c : #dcdcdc;
-    property <color> c-tab-active: dark ? #1e1e1e : #ffffff;
-    property <color> c-border: dark ? #444 : #bbb;
-    property <color> c-hover: dark ? #3e4a5a : #cce4f7;
+    property <color> c-chrome: Theme.chrome;
+    property <color> c-menu: Theme.menu;
+    property <color> c-fg: Theme.fg;
+    property <color> c-editor: Theme.editor-bg;
+    property <color> c-gutter: Theme.gutter;
+    property <color> c-gutter-fg: Theme.gutter-fg;
+    property <color> c-curline: Theme.curline;
+    property <color> c-tabbar: Theme.tabbar;
+    property <color> c-tab: Theme.tab;
+    property <color> c-tab-active: Theme.tab-active;
+    property <color> c-border: Theme.border;
+    property <color> c-hover: Theme.hover;
     property <int> drag-from: -1;
     property <int> drop-target: -1;
     property <length> drag-abs-x;
     in property <string> mono: "JetBrains Mono";
+    // sidebar: 0 = hidden, 1 = folder workspace, 2 = function list
+    in property <int> side-mode: 0;
+    in property <[SideItem]> side-items;
+    in property <string> side-title;
+    in property <int> side-sel: -1;
+    callback side-click(int);
+    callback side-activate(int);
+    callback side-switch(int);
+    callback side-open-folder();
+    callback custom-key(string, bool, bool, bool) -> bool;
     in property <EdState> v0;
     in property <EdState> v1;
     in property <bool> split: false;
@@ -181,6 +192,7 @@ export component AppWindow inherits Window {
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(e) => {
+            if (custom-key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt)) { return accept; }
             if (e.modifiers.control && !e.modifiers.alt) {
                 if ((e.text == "r" || e.text == "R") && e.modifiers.shift) { menu-action("macrorec"); return accept; }
                 if ((e.text == "p" || e.text == "P") && e.modifiers.shift) { menu-action("macroplay"); return accept; }
@@ -207,6 +219,7 @@ export component AppWindow inherits Window {
             if (e.modifiers.alt && !e.modifiers.control && (e.text == "h" || e.text == "H")) { menu-action(hex-mode ? "textmode" : "hexmode"); return accept; }
             if (e.modifiers.alt && !e.modifiers.control && (e.text == "c" || e.text == "C")) { menu-action("columnmode"); return accept; }
             if (e.text == Key.F8) { menu-action("otherview"); return accept; }
+            if (e.text == Key.F7) { menu-action(e.modifiers.shift ? "diffprev" : "diffnext"); return accept; }
             if (e.text == Key.F3) { find-next(!e.modifiers.shift); return accept; }
             if (e.text == Key.Insert) { menu-action("toggleovr"); return accept; }
             if (e.text == Key.Escape) { fif-visible = false; prompt-visible = false; find-visible = false; goto-visible = false; hits-visible = false; about-visible = false; open-menu = -1; ctx-visible = false; rename-visible = false; focus-editor(); return accept; }
@@ -303,6 +316,42 @@ export component AppWindow inherits Window {
         // ---- editor + preview ----
         HorizontalLayout {
             metric := Text { visible: false; width: 0; text: "MMMMMMMMMMMMMMMMMMMM"; font-family: mono; font-size: editor-font-size; }
+            if side-mode > 0: Rectangle { width: 240px; background: c-editor;
+                VerticalLayout {
+                    Rectangle { height: 24px; background: c-chrome;
+                        HorizontalLayout { padding-left: 2px; padding-right: 2px; spacing: 2px;
+                            for t[ti] in ["資料夾", "函式清單"]: Rectangle {
+                                width: stt.preferred-width + 14px;
+                                background: side-mode == ti + 1 ? c-tab-active : sta.has-hover ? c-hover : transparent;
+                                stt := Text { text: t; color: c-fg; vertical-alignment: center; horizontal-alignment: center; font-weight: side-mode == ti + 1 ? 700 : 400; }
+                                sta := TouchArea { clicked => { side-switch(ti + 1); } }
+                            }
+                            Rectangle {}
+                            if side-mode == 1: Rectangle { width: 22px; background: sfa.has-hover ? c-hover : transparent;
+                                Text { text: "📂"; color: c-fg; vertical-alignment: center; horizontal-alignment: center; }
+                                sfa := TouchArea { clicked => { side-open-folder(); } } }
+                            Rectangle { width: 20px; Text { text: "✕"; color: c-fg; vertical-alignment: center; horizontal-alignment: center; }
+                                TouchArea { clicked => { side-switch(0); } } }
+                        }
+                    }
+                    Rectangle { height: 20px; background: c-chrome;
+                        Text { x: 6px; width: parent.width - 8px; text: side-title; color: c-gutter-fg; vertical-alignment: center; overflow: elide; font-size: 12px; } }
+                    ListView {
+                        for it[i] in side-items: Rectangle { height: 20px;
+                            background: i == side-sel ? c-curline : sia.has-hover ? c-hover : transparent;
+                            HorizontalLayout { padding-left: 4px + it.indent * 14px; spacing: 4px;
+                                Text { width: 12px; color: c-gutter-fg; vertical-alignment: center;
+                                    text: it.kind == 1 ? "▸" : it.kind == 2 ? "▾" : ""; }
+                                Text { width: 14px; vertical-alignment: center; color: it.kind == 3 ? #a35cc6 : c-gutter-fg; font-size: 11px;
+                                    text: it.kind == 0 ? "📄" : it.kind == 3 ? "ƒ" : it.kind == 4 ? "#" : "📁"; }
+                                Text { text: it.text; color: c-fg; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; font-family: it.kind >= 3 ? mono : ""; }
+                            }
+                            sia := TouchArea { clicked => { side-click(i); } double-clicked => { side-activate(i); } }
+                        }
+                    }
+                }
+            }
+            if side-mode > 0: Rectangle { width: 1px; background: c-border; }
             ev0 := EditorView {
                 horizontal-stretch: 1;
                 st: v0; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite; caret-idle: caret-idle;

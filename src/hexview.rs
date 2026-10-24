@@ -94,7 +94,7 @@ impl App {
                 rects.push(EdRect { x: bx, w: bw, kind: 5 });
                 carets.push(EdCaret { x: cx, y: i as f32 * lh });
             }
-            rows.push(EdRow { num: crate::hex::offset_label(off, wide).into(), line: r as i32, fold: 0, cur: r == cur_row, mark: false,
+            rows.push(EdRow { num: crate::hex::offset_label(off, wide).into(), line: r as i32, fold: 0, cur: r == cur_row, mark: false, diff: 0,
                               toks: ModelRc::new(VecModel::from(toks)), rects: ModelRc::new(VecModel::from(rects)) });
         }
         if !active { carets.clear(); }

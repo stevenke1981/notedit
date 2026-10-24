@@ -71,16 +71,18 @@ Sources: [MadEdit on SourceForge](https://sourceforge.net/projects/madedit/) ("T
 | P0 | Lossless legacy-encoding saves | Implemented (#6) | Refuse writes that would replace unrepresentable characters; regression tests cover legacy and Unicode encodings |
 | P0 | Large-file behavior | Implemented (v0.3.0) | ropey buffer + custom virtualized editor surface; incremental, time-budgeted highlighting |
 | P1 | Find in Files | Implemented (v0.4.0) | Folder scope, filters, regex, recursive mode, result panel, click-to-open |
-| P1 | Folder as Workspace | Missing | Tree panel, refresh, open/rename/create/delete with safe confirmation |
-| P1 | Function List | Missing | Language-aware symbol extraction, filter, click-to-navigate |
+| P1 | Folder as Workspace | Partial (v0.6.0: tree, open folder, double-click open, remembered; no file ops) | Tree panel, refresh, open/rename/create/delete with safe confirmation |
+| P1 | Function List | Implemented (v0.6.0: regex-based, 14 languages, click-to-navigate; no filter box) | Language-aware symbol extraction, filter, click-to-navigate |
 | P1 | Auto-completion | Implemented (v0.3.0) | Word completion plus language keywords; keyboard navigation; configurable enable/disable |
 | P1 | Bookmarks + search marks | Partial (v0.3.0: bookmarks, mark-all occurrences of selected word) | Toggle/navigate bookmarks and mark-all search hits |
-| P2 | Dual/split view | Partial (v0.3.0: clone into second view; move-to-other-view missing) | Move or clone a document into a second synchronized editor view |
+| P2 | Dual/split view | Implemented (v0.6.0: second view can show a different document) | Move or clone a document into a second synchronized editor view |
 | P2 | Multi-selection / multi-caret | Implemented (v0.3.0) | Multiple carets and simultaneous edits with correct undo grouping |
 | P2 | Column mode | Implemented (v0.4.0: column-mode toggle Alt+C, Alt+drag, Alt+Shift+arrows, incremental numbering) | Rectangular selection/edit with status reporting |
 | P2 | Code folding | Implemented (v0.3.0: bracket/indent based) | Fold/unfold scopes with visible gutter controls and preserved navigation |
 | P2 | Document Map | Implemented (v0.3.0) | Minimap/document overview with viewport indicator |
 | P2 | Tab management parity | Partial | pin tabs, sort tabs, close unchanged/left/right, MRU switcher |
+| P2 | Compare | Implemented (v0.6.0: side-by-side diff, F7/Shift+F7; no line alignment or synced scroll) |
+| P3 | Custom theme / shortcuts | Implemented (v0.6.0: settings.json, hot-reload on save; no GUI dialog) |
 | P3 | User Defined Languages | Missing | User-editable syntax definitions independent of built-in syntect definitions |
 | P3 | Plugin API | Missing | Versioned, permission-aware extension boundary with failure isolation |
 | P3 | External commands | Partial | Configurable commands, variables for file/path/selection, captured output |

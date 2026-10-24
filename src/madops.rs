@@ -206,7 +206,7 @@ impl App {
     // ---------------- find in files
     pub(crate) fn fif_browse(&self) {
         let ui = self.ui();
-        let mut d = rfd::FileDialog::new().set_title("選擇資料夾");
+        let mut d = crate::dlg::file().set_title("選擇資料夾");
         let cur = ui.get_fif_dir().to_string();
         if !cur.is_empty() { d = d.set_directory(cur); }
         if let Some(p) = d.pick_folder() { ui.set_fif_dir(p.display().to_string().into()); }
@@ -309,7 +309,7 @@ impl App {
         let total: usize = files.iter().map(|f| f.1).sum();
         let mut list: String = files.iter().take(15).map(|(p, n)| format!("  {} ({n})\n", p.strip_prefix(&root).unwrap_or(p).display())).collect();
         if files.len() > 15 { list += &format!("  …以及另外 {} 個檔案\n", files.len() - 15); }
-        let ok = rfd::MessageDialog::new().set_title("在檔案中取代")
+        let ok = crate::dlg::msg().set_title("在檔案中取代")
             .set_description(format!("將「{}」取代為「{}」：\n共 {} 個檔案、{} 處。\n\n{}\n已開啟的文件只會在編輯器中修改（可復原，尚未存檔）；\n其他檔案會先備份為 .bak 再寫入（可用「復原檔案取代」還原）。\n\n確定要取代嗎？",
                 ui.get_find_text(), rep, files.len(), total, list))
             .set_buttons(rfd::MessageButtons::YesNo).show() == rfd::MessageDialogResult::Yes;
@@ -317,7 +317,7 @@ impl App {
         let mut disk = vec![];
         let (mut mf, mut mh) = (0, 0);
         for (path, _) in files {
-            let cp = std::fs::canonicalize(&path).unwrap_or(path.clone());
+            let cp = crate::file_io::canon(&path).unwrap_or(path.clone());
             let open = self.st.borrow().docs.iter().position(|d| d.path.as_ref() == Some(&cp) && d.hex.is_none());
             let Some(di) = open else { disk.push(path); continue };
             let mut st = self.st.borrow_mut();
@@ -372,7 +372,7 @@ impl App {
     pub(crate) fn fif_replace_undo(&self) {
         let b = std::mem::take(&mut self.st.borrow_mut().rif_backups);
         if b.is_empty() { msg("沒有可復原的檔案取代。"); return; }
-        let ok = rfd::MessageDialog::new().set_title("復原檔案取代").set_description(format!("要以 .bak 備份還原 {} 個檔案嗎？", b.len()))
+        let ok = crate::dlg::msg().set_title("復原檔案取代").set_description(format!("要以 .bak 備份還原 {} 個檔案嗎？", b.len()))
             .set_buttons(rfd::MessageButtons::YesNo).show() == rfd::MessageDialogResult::Yes;
         if !ok { self.st.borrow_mut().rif_backups = b; return; }
         let mut bad = 0;
