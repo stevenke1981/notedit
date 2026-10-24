@@ -7,6 +7,28 @@ use std::sync::{mpsc, Arc};
 
 pub enum FifMsg { Hits(Vec<fif::Hit>), Done(usize, usize) }
 
+/// messages from the Replace-in-Files worker
+pub enum RifMsg {
+    Scanned(Vec<(PathBuf, usize)>),
+    /// files, hits, errors, (file, .bak) pairs
+    Written(usize, usize, Vec<String>, Vec<(PathBuf, PathBuf)>),
+}
+
+/// a Replace-in-Files run in progress
+pub struct RifJob {
+    pub rx: mpsc::Receiver<RifMsg>,
+    pub cancel: Arc<AtomicBool>,
+    pub progress: Arc<std::sync::atomic::AtomicUsize>,
+    pub re: regex::Regex,
+    pub rep: String,
+    pub expand: bool,
+    pub root: PathBuf,
+    /// 0 = scanning, otherwise number of files being written
+    pub writing: usize,
+    /// matches already replaced in open documents
+    pub mem: (usize, usize),
+}
+
 impl App {
     /// Apply `f` to the selection, or to the whole document when nothing is selected.
     fn transform(&self, f: impl Fn(&str) -> String) {
@@ -215,23 +237,75 @@ impl App {
         ui.set_find_status("".into());
         std::thread::spawn(move || {
             let tx2 = tx.clone();
-            let (files, n) = fif::search(&root, &filters, recursive, &re, &cancel, 20000, |b| { if !b.is_empty() { let _ = tx2.send(FifMsg::Hits(b)); } });
+            let (files, n) = fif::search(&root, &filters, recursive, &re, &cancel, 20000, None, |b| { if !b.is_empty() { let _ = tx2.send(FifMsg::Hits(b)); } });
             let _ = tx.send(FifMsg::Done(files, n));
         });
         self.kick();
     }
 
-    /// Replace in Files: rescans, asks for confirmation, then writes. Open documents are
-    /// changed in memory (one undo step, not saved); other files get a `.bak` copy first.
+    /// Replace in Files, step 1: scan on a worker thread (progress + cancel via 停止).
     pub(crate) fn fif_replace(&self) {
         let ui = self.ui();
+        if self.st.borrow().rif.is_some() || self.st.borrow().fif_rx.is_some() { return; }
         let Some(re) = self.regex() else { return };
         let root = PathBuf::from(ui.get_fif_dir().to_string());
         if !root.is_dir() { ui.set_find_status("資料夾不存在".into()); return; }
-        let rep = ui.get_replace_text().to_string();
-        let expand = ui.get_use_regex();
-        let files = fif::matching_files(&root, &ui.get_fif_filter(), ui.get_fif_recursive(), &re);
-        if files.is_empty() { ui.set_find_status("找不到符合的內容".into()); return; }
+        let (filters, recursive) = (ui.get_fif_filter().to_string(), ui.get_fif_recursive());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel();
+        {
+            let (re, root, cancel, progress) = (re.clone(), root.clone(), cancel.clone(), progress.clone());
+            std::thread::spawn(move || { let _ = tx.send(RifMsg::Scanned(fif::matching_files(&root, &filters, recursive, &re, &cancel, &progress))); });
+        }
+        self.st.borrow_mut().rif = Some(RifJob { rx, cancel, progress, re, rep: ui.get_replace_text().to_string(), expand: ui.get_use_regex(), root, writing: 0, mem: (0, 0) });
+        ui.set_fif_running(true);
+        ui.set_find_status("掃描中…".into());
+        self.kick();
+    }
+
+    /// polled from the tick while a Replace-in-Files job exists
+    pub(crate) fn rif_poll(&self) {
+        let ui = self.ui();
+        let msg_in = {
+            let st = self.st.borrow();
+            let Some(j) = &st.rif else { return };
+            let n = j.progress.load(Ordering::Relaxed);
+            let status = if j.writing == 0 { format!("掃描中… 已檢查 {n} 個檔案") } else { format!("寫入中… {n} / {}", j.writing) };
+            if ui.get_find_status() != status.as_str() { ui.set_find_status(status.into()); }
+            match j.rx.try_recv() { Ok(m) => Some(m), Err(mpsc::TryRecvError::Empty) => None, Err(_) => Some(RifMsg::Written(0, 0, vec!["背景工作意外結束".into()], vec![])) }
+        };
+        let Some(m) = msg_in else { return };
+        match m {
+            RifMsg::Scanned(files) => {
+                let cancelled = self.st.borrow().rif.as_ref().unwrap().cancel.load(Ordering::Relaxed);
+                if cancelled || files.is_empty() {
+                    self.st.borrow_mut().rif = None;
+                    ui.set_fif_running(false);
+                    ui.set_find_status(if cancelled { "已停止，未修改任何檔案" } else { "找不到符合的內容" }.into());
+                    return;
+                }
+                self.rif_confirm_and_write(files);
+            }
+            RifMsg::Written(nf, nh, errs, backups) => {
+                let j = self.st.borrow_mut().rif.take().unwrap();
+                let cancelled = j.cancel.load(Ordering::Relaxed);
+                let (nf, nh) = (nf + j.mem.0, nh + j.mem.1);
+                self.st.borrow_mut().rif_backups = backups;
+                ui.set_fif_running(false);
+                let mut m = format!("已在 {nf} 個檔案中取代 {nh} 處{}。", if cancelled { "（已停止，其餘檔案未修改）" } else { "" });
+                ui.set_find_status(m.clone().into());
+                self.refresh_all();
+                // success is reported in the dialog's status line; only failures need a message box
+                if !errs.is_empty() { m += &format!("\n\n以下 {} 個檔案失敗：\n{}", errs.len(), errs.join("\n")); self.defer_msg(m); }
+            }
+        }
+    }
+
+    /// step 2: confirm, edit open documents in memory, then write the rest on a worker thread
+    fn rif_confirm_and_write(&self, files: Vec<(PathBuf, usize)>) {
+        let ui = self.ui();
+        let (re, rep, expand, root) = { let st = self.st.borrow(); let j = st.rif.as_ref().unwrap(); (j.re.clone(), j.rep.clone(), j.expand, j.root.clone()) };
         let total: usize = files.iter().map(|f| f.1).sum();
         let mut list: String = files.iter().take(15).map(|(p, n)| format!("  {} ({n})\n", p.strip_prefix(&root).unwrap_or(p).display())).collect();
         if files.len() > 15 { list += &format!("  …以及另外 {} 個檔案\n", files.len() - 15); }
@@ -239,49 +313,59 @@ impl App {
             .set_description(format!("將「{}」取代為「{}」：\n共 {} 個檔案、{} 處。\n\n{}\n已開啟的文件只會在編輯器中修改（可復原，尚未存檔）；\n其他檔案會先備份為 .bak 再寫入（可用「復原檔案取代」還原）。\n\n確定要取代嗎？",
                 ui.get_find_text(), rep, files.len(), total, list))
             .set_buttons(rfd::MessageButtons::YesNo).show() == rfd::MessageDialogResult::Yes;
-        if !ok { return; }
-        let (mut n_files, mut n_hits, mut errs, mut backups) = (0, 0, vec![], vec![]);
+        if !ok { self.st.borrow_mut().rif = None; ui.set_fif_running(false); ui.set_find_status("已取消".into()); return; }
+        let mut disk = vec![];
+        let (mut mf, mut mh) = (0, 0);
         for (path, _) in files {
             let cp = std::fs::canonicalize(&path).unwrap_or(path.clone());
             let open = self.st.borrow().docs.iter().position(|d| d.path.as_ref() == Some(&cp) && d.hex.is_none());
-            if let Some(di) = open {
-                let mut st = self.st.borrow_mut();
-                let State { docs, views, .. } = &mut *st;
-                let d = &mut docs[di];
-                let t = d.text();
-                let n = re.find_iter(&t).count();
-                if n == 0 { continue; }
-                let out = if expand { re.replace_all(&t, rep.as_str()) } else { re.replace_all(&t, regex::NoExpand(&rep)) };
-                let sels = views.iter().find(|v| v.doc == di).map(|v| v.sels.clone()).unwrap_or_default();
-                d.buf.set_text(&sels, &out);
-                d.modified = true;
-                d.folds.clear(); d.folds_ver += 1;
-                let len = d.buf.len();
-                for v in views.iter_mut().filter(|v| v.doc == di) { for s in v.sels.iter_mut() { s.anchor = s.anchor.min(len); s.head = s.head.min(len); } }
-                n_files += 1; n_hits += n;
-                continue;
-            }
-            let r = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| fif::replace_bytes(&b, &re, &rep, expand));
-            match r {
-                Ok(Some((bytes, n))) => {
-                    let mut bak = path.clone().into_os_string(); bak.push(".bak");
-                    let bak = PathBuf::from(bak);
-                    if let Err(e) = std::fs::copy(&path, &bak).map_err(|e| e.to_string()).and_then(|_| file_io::durable_write(&path, &bytes).map_err(|e| e.to_string())) {
-                        errs.push(format!("{}：{e}", path.display())); continue;
-                    }
-                    backups.push((path, bak));
-                    n_files += 1; n_hits += n;
-                }
-                Ok(None) => {}
-                Err(e) => errs.push(format!("{}：{e}", path.display())),
-            }
+            let Some(di) = open else { disk.push(path); continue };
+            let mut st = self.st.borrow_mut();
+            let State { docs, views, .. } = &mut *st;
+            let d = &mut docs[di];
+            let t = d.text();
+            let n = re.find_iter(&t).count();
+            if n == 0 { continue; }
+            let out = if expand { re.replace_all(&t, rep.as_str()) } else { re.replace_all(&t, regex::NoExpand(&rep)) };
+            let sels = views.iter().find(|v| v.doc == di).map(|v| v.sels.clone()).unwrap_or_default();
+            d.buf.set_text(&sels, &out);
+            d.modified = true;
+            d.folds.clear(); d.folds_ver += 1;
+            let len = d.buf.len();
+            for v in views.iter_mut().filter(|v| v.doc == di) { for s in v.sels.iter_mut() { s.anchor = s.anchor.min(len); s.head = s.head.min(len); } }
+            mf += 1; mh += n;
         }
-        self.st.borrow_mut().rif_backups = backups;
-        self.refresh_all();
-        let mut m = format!("已在 {n_files} 個檔案中取代 {n_hits} 處。");
-        if !errs.is_empty() { m += &format!("\n\n以下 {} 個檔案失敗：\n{}", errs.len(), errs.join("\n")); }
-        ui.set_find_status(format!("已在 {n_files} 個檔案中取代 {n_hits} 處").into());
-        msg(&m);
+        let (tx, rx) = mpsc::channel();
+        let (cancel, progress) = { let mut st = self.st.borrow_mut(); let j = st.rif.as_mut().unwrap();
+            j.rx = rx; j.writing = disk.len().max(1); j.mem = (mf, mh); j.progress.store(0, Ordering::Relaxed); (j.cancel.clone(), j.progress.clone()) };
+        std::thread::spawn(move || {
+            let (mut nf, mut nh, mut errs, mut backups) = (0, 0, vec![], vec![]);
+            for (i, path) in disk.into_iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) { break; }
+                progress.store(i + 1, Ordering::Relaxed);
+                let r = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| fif::replace_bytes(&b, &re, &rep, expand));
+                match r {
+                    Ok(Some((bytes, n))) => {
+                        let mut bak = path.clone().into_os_string(); bak.push(".bak");
+                        let bak = PathBuf::from(bak);
+                        if let Err(e) = std::fs::copy(&path, &bak).map_err(|e| e.to_string()).and_then(|_| file_io::durable_write(&path, &bytes).map_err(|e| e.to_string())) {
+                            errs.push(format!("{}：{e}", path.display())); continue;
+                        }
+                        backups.push((path, bak)); nf += 1; nh += n;
+                    }
+                    Ok(None) => {}
+                    Err(e) => errs.push(format!("{}：{e}", path.display())),
+                }
+            }
+            let _ = tx.send(RifMsg::Written(nf, nh, errs, backups));
+        });
+        self.render_all();
+        self.kick();
+    }
+
+    /// show a message box after the current frame was painted (menus/progress closed first)
+    pub(crate) fn defer_msg(&self, m: String) {
+        slint::Timer::single_shot(Duration::from_millis(30), move || msg(&m));
     }
 
     /// restore the files written by the last Replace in Files from their .bak copies
@@ -299,7 +383,11 @@ impl App {
         if bad > 0 { msg(&format!("{bad} 個檔案無法還原。")); }
     }
 
-    pub(crate) fn fif_stop(&self) { self.st.borrow().fif_cancel.store(true, Ordering::Relaxed); }
+    pub(crate) fn fif_stop(&self) {
+        let st = self.st.borrow();
+        st.fif_cancel.store(true, Ordering::Relaxed);
+        if let Some(j) = &st.rif { j.cancel.store(true, Ordering::Relaxed); }
+    }
 
     /// called from the periodic tick
     pub(crate) fn fif_poll(&self) {

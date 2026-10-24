@@ -2,7 +2,7 @@
 //! worker thread; results are delivered in batches.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,7 +35,7 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".svn", ".hg"];
 const MAX_FILE: u64 = 64 << 20;
 
 /// Search `root`. `emit` receives batches of hits; returns (files searched, hits).
-pub fn search(root: &Path, filters: &str, recursive: bool, re: &regex::Regex, cancel: &Arc<AtomicBool>, limit: usize, mut emit: impl FnMut(Vec<Hit>)) -> (usize, usize) {
+pub fn search(root: &Path, filters: &str, recursive: bool, re: &regex::Regex, cancel: &Arc<AtomicBool>, limit: usize, progress: Option<&AtomicUsize>, mut emit: impl FnMut(Vec<Hit>)) -> (usize, usize) {
     let mut stack = vec![root.to_path_buf()];
     let (mut files, mut total) = (0, 0);
     let mut batch = Vec::new();
@@ -56,6 +56,7 @@ pub fn search(root: &Path, filters: &str, recursive: bool, re: &regex::Regex, ca
             let Ok(bytes) = std::fs::read(e.path()) else { continue };
             if crate::hex::looks_binary(&bytes[..bytes.len().min(8192)]) { continue; }
             files += 1;
+            if let Some(p) = progress { p.store(files, Ordering::Relaxed); }
             let (text, _, _) = crate::decode(&bytes);
             let mut line = 0;
             let mut last = 0;
@@ -101,12 +102,12 @@ mod tests {
         std::fs::write(d.join("x.md"), "foo").unwrap();
         let re = regex::Regex::new("fo+").unwrap();
         let mut hits = vec![];
-        let (files, n) = search(&d, "*.txt", true, &re, &Arc::new(AtomicBool::new(false)), 100, |b| hits.extend(b));
+        let (files, n) = search(&d, "*.txt", true, &re, &Arc::new(AtomicBool::new(false)), 100, None, |b| hits.extend(b));
         assert_eq!((files, n), (2, 3));
         assert_eq!(hits[0].line, 2);
         assert_eq!(hits[0].snippet, "foo bar foo");
         assert!(hits.iter().any(|h| h.path.ends_with("sub/b.txt") && h.start == 3 && h.end == 6));
-        let (_, n) = search(&d, "*.txt", false, &re, &Arc::new(AtomicBool::new(false)), 100, |_| {});
+        let (_, n) = search(&d, "*.txt", false, &re, &Arc::new(AtomicBool::new(false)), 100, None, |_| {});
         assert_eq!(n, 2);
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -140,10 +141,9 @@ pub fn encode_raw(text: &str, enc: &'static encoding_rs::Encoding, bom: bool) ->
 }
 
 /// Files under `root` that contain at least one match, with their match count.
-pub fn matching_files(root: &Path, filters: &str, recursive: bool, re: &regex::Regex) -> Vec<(PathBuf, usize)> {
+pub fn matching_files(root: &Path, filters: &str, recursive: bool, re: &regex::Regex, cancel: &Arc<AtomicBool>, progress: &AtomicUsize) -> Vec<(PathBuf, usize)> {
     let mut out: Vec<(PathBuf, usize)> = vec![];
-    let cancel = Arc::new(AtomicBool::new(false));
-    search(root, filters, recursive, re, &cancel, usize::MAX, |b| for h in b {
+    search(root, filters, recursive, re, cancel, usize::MAX, Some(progress), |b| for h in b {
         match out.last_mut() { Some((p, n)) if *p == h.path => *n += 1, _ => out.push((h.path, 1)) }
     });
     out

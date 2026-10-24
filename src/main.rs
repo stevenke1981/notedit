@@ -156,6 +156,7 @@ struct State {
     fif_root: PathBuf,
     /// (file, .bak) pairs written by the last Replace in Files
     rif_backups: Vec<(PathBuf, PathBuf)>,
+    rif: Option<madops::RifJob>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -325,6 +326,8 @@ struct App {
     dirty: std::cell::Cell<bool>,
     rkey: RefCell<[(f32, f32, f32, f32); 2]>,
     ticker: slint::Timer,
+    /// fires after 10 s without rendering; switches to a static caret
+    idle: slint::Timer,
 }
 
 impl App {
@@ -1390,7 +1393,20 @@ impl App {
     }
 
     fn ed_mouse(&self, vi: usize, kind: i32, x: f32, y: f32, ctrl: bool, shift: bool, alt: bool) {
-        if self.is_hex(vi) { self.hex_mouse(vi, kind, x, y, shift); return; }
+        if self.is_hex(vi) { if kind != 3 { self.hex_mouse(vi, kind, x, y, shift); } return; }
+        if kind == 3 {
+            // right click: move the caret there unless the click is inside a selection
+            self.ed_focused(vi);
+            let (pos, _, _) = self.pos_at(vi, x, y);
+            let mut st = self.st.borrow_mut();
+            let v = &mut st.views[vi];
+            if !v.sels.iter().any(|s| !s.is_empty() && s.start() <= pos && pos <= s.end()) {
+                v.sels = vec![Sel::caret(pos)]; v.primary = 0; v.ac = None;
+            }
+            drop(st);
+            self.render(vi); self.refresh_status();
+            return;
+        }
         let alt = alt ^ self.st.borrow().column_mode;
         if kind == 0 { self.ed_focused(vi); }
         let (cw, lh) = self.metrics();
@@ -1623,6 +1639,12 @@ impl App {
     }
 
     fn ed_input(&self, vi: usize, text: &str) {
+        // key events forwarded while idle may carry Slint's private-use key codes
+        let owned: String;
+        let text = if text.chars().any(|c| ('\u{f700}'..='\u{f8ff}').contains(&c) || (c.is_control() && c != '\n' && c != '\t')) {
+            owned = text.chars().filter(|c| !('\u{f700}'..='\u{f8ff}').contains(c) && (!c.is_control() || *c == '\n' || *c == '\t')).collect();
+            owned.as_str()
+        } else { text };
         if text.is_empty() { return; }
         if self.is_hex(vi) { self.hex_input(vi, text); self.refresh_status(); return; }
         self.record(format!("i:{text}"));
@@ -2082,6 +2104,9 @@ impl App {
         if vi == 1 && !self.st.borrow().split { return; }
         if self.is_hex(vi) { self.hex_render(vi); return; }
         let ui = self.ui();
+        if ui.get_caret_idle() { ui.set_caret_idle(false); }
+        let w = ui.as_weak();
+        self.idle.start(slint::TimerMode::SingleShot, Duration::from_secs(10), move || { if let Some(u) = w.upgrade() { u.set_caret_idle(true); } });
         let (cw, lh) = self.metrics();
         let (w, h) = self.view_size(vi);
         if w <= 1.0 || h <= 1.0 { self.mark_dirty(); }
@@ -2351,7 +2376,8 @@ impl App {
             if self.dirty.get() || k != (cw, lh, w, h) { self.dirty.set(false); self.render(vi); }
         }
         self.fif_poll();
-        if !self.dirty.get() && self.st.borrow().fif_rx.is_none() { self.ticker.stop(); }
+        self.rif_poll();
+        if !self.dirty.get() && self.st.borrow().fif_rx.is_none() && self.st.borrow().rif.is_none() { self.ticker.stop(); }
     }
 
     fn play_macro(&self, times: usize) {
@@ -2527,15 +2553,24 @@ fn main() -> Result<(), slint::PlatformError> {
         preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
         hits: vec![], font_family: if cfg.font_family.trim().is_empty() { "JetBrains Mono".into() } else { cfg.font_family.clone() },
         font_choices: detect_fonts(), ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete,
-        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), rif_backups: vec![], cfg };
+        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), rif_backups: vec![], rif: None, cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(),
+    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
-    cb!(on_menu_action, |a, s: SharedString| { a.action(&s) });
+    // Close open menus first and run the action after the next frame, so a modal
+    // dialog opened by the action never shows a stale menu behind it.
+    cb!(on_menu_action, |a, s: SharedString| {
+        let ui = a.ui();
+        if ui.get_open_menu() >= 0 || ui.get_ctx_visible() {
+            ui.set_open_menu(-1); ui.set_ctx_visible(false);
+            let w = Rc::downgrade(&a);
+            slint::Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = w.upgrade() { a.action(&s) } });
+        } else { a.action(&s) }
+    });
     cb!(on_ed_input, |a, v: i32, t: SharedString| { a.ed_input(v as usize & 1, &t) });
     cb!(on_ed_mouse, |a, v: i32, k: i32, x: f32, y: f32, c: bool, s: bool, al: bool| { a.ed_mouse(v as usize & 1, k, x, y, c, s, al) });
     cb!(on_ed_gutter, |a, v: i32, r: i32, f: bool, s: bool| { a.ed_gutter(v as usize & 1, r, f, s) });

@@ -27,7 +27,7 @@ Already implemented in NotEdit v0.4.0 (see the MadEdit section below for v0.4.0 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Replace in Files | Done | Folder / filter / subfolders / regex; preview via results panel; confirmation listing files and counts; open docs edited in memory (undoable); other files get `.bak` backups and can be restored with "復原檔案取代"; encoding, BOM and EOL preserved; binary and >64 MB files skipped. Runs synchronously. |
+| Replace in Files | Done | Folder / filter / subfolders / regex; preview via results panel; confirmation listing files and counts; open docs edited in memory (undoable); other files get `.bak` backups and can be restored with "復原檔案取代"; encoding, BOM and EOL preserved; binary and >64 MB files skipped. Scan and write run on background threads with live progress and a Stop button (v0.5.1). |
 | JSON format / minify | Done | Order-preserving; validated with serde_json, error shows line and column. |
 | XML format / minify | Done | Lightweight tokenizer; mismatched / unclosed tags reported with line numbers. No DTD/namespace validation. |
 | Modified marker follows undo | Done | Undo/redo back to the saved text clears the marker. |

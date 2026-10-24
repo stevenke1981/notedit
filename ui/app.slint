@@ -137,6 +137,8 @@ export component AppWindow inherits Window {
     out property <length> v1-w: ev1.text-w;
     out property <length> v1-h: ev1.text-h;
     callback layout-changed();
+    /// set after ~10 s without activity: the caret is drawn statically (no blink redraws)
+    in property <bool> caret-idle: false;
     changed v0-w => { layout-changed(); }
     changed v0-h => { layout-changed(); }
     changed v1-w => { layout-changed(); }
@@ -172,7 +174,7 @@ export component AppWindow inherits Window {
 
     public function focus-editor() { if (split && active-view == 1) { ev1.focus-in(); } else { ev0.focus-in(); } }
 
-    property <int> open-menu: -1;
+    in-out property <int> open-menu: -1;
     property <string> tip-text; property <length> tip-x; property <bool> tip-on;
     function show-tip(t: string, x: length, h: bool) { tip-text = t; tip-x = x; tip-on = h; }
 
@@ -303,7 +305,7 @@ export component AppWindow inherits Window {
             metric := Text { visible: false; width: 0; text: "MMMMMMMMMMMMMMMMMMMM"; font-family: mono; font-size: editor-font-size; }
             ev0 := EditorView {
                 horizontal-stretch: 1;
-                st: v0; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite;
+                st: v0; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite; caret-idle: caret-idle;
                 map-visible: docmap && !split; active: !split || active-view == 0;
                 key(t, c, s, a) => { ed-key(0, t, c, s, a) }
                 input(t) => { ed-input(0, t); }
@@ -320,7 +322,7 @@ export component AppWindow inherits Window {
             Rectangle { width: split ? 4px : 0px; background: c-border; }
             ev1 := EditorView {
                 horizontal-stretch: split ? 1 : 0; max-width: split ? 100000px : 0px; visible: split;
-                st: v1; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite;
+                st: v1; line-h: line-h; cell-w: cell-w; font-size: editor-font-size; mono: mono; dark: dark; overwrite: overwrite; caret-idle: caret-idle;
                 map-visible: false; active: active-view == 1;
                 key(t, c, s, a) => { ed-key(1, t, c, s, a) }
                 input(t) => { ed-input(1, t); }

@@ -17,6 +17,10 @@ export struct EdState {
 
 export component EditorView inherits Rectangle {
     in property <EdState> st;
+    in property <bool> caret-idle;
+    changed caret-idle => {
+        if (caret-idle && ime.has-focus) { idle-fs.focus(); } else if (!caret-idle && idle-fs.has-focus) { ime.focus(); }
+    }
     in property <length> line-h: 18px;
     in property <length> cell-w: 8px;
     in property <length> font-size: 14px;
@@ -102,7 +106,7 @@ export component EditorView inherits Rectangle {
                     for c[ci] in st.carets: Rectangle {
                         x: c.x; y: c.y; width: overwrite ? cell-w : 2px; height: line-h;
                         background: overwrite ? (dark ? #ffffff70 : #00000060) : c-fg;
-                        visible: ime.has-focus && (overwrite || ci > 0);
+                        visible: (ime.has-focus || idle-fs.has-focus) && (overwrite || ci > 0 || caret-idle);
                     }
                     ta := TouchArea {
                         mouse-cursor: text;
@@ -113,6 +117,7 @@ export component EditorView inherits Rectangle {
                             }
                             if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right) {
                                 ime.focus();
+                                mouse(3, self.mouse-x, self.mouse-y, false, false, false);
                                 context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                             }
                             if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
@@ -125,6 +130,16 @@ export component EditorView inherits Rectangle {
                     if ime.preedit-text != "": Rectangle {
                         x: ime.x; y: ime.y; width: ime.preferred-width + 2px; height: line-h;
                         background: dark ? #1e1e1e : #ffffff; border-width: 1px; border-color: c-gutter-fg;
+                    }
+                    // While idle, keyboard focus moves to this FocusScope so the TextInput's
+                    // cursor blinker (which forces redraws) stops; the first key brings it back.
+                    idle-fs := FocusScope {
+                        width: 0; height: 0;
+                        key-pressed(e) => {
+                            if (root.key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt)) { return accept; }
+                            if (!e.modifiers.control && !e.modifiers.alt && e.text != "") { root.input(e.text); return accept; }
+                            reject
+                        }
                     }
                     ime := TextInput {
                         x: st.carets.length > 0 ? st.carets[0].x : 0px;
