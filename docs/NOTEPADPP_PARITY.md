@@ -23,6 +23,18 @@ Already implemented in NotEdit v0.4.0 (see the MadEdit section below for v0.4.0 
 - release builds for Windows, Linux and macOS
 - v0.3.0: custom ropey-based editor surface (`src/editor.rs` headless core + `ui/editor.slint`): wrap with highlighting, folding, split/clone view, multi-caret + column selection, autocomplete, bookmarks, document map, macro recording of shortcuts and menu actions
 
+## v0.5.0 additions
+
+| Feature | Status | Notes |
+|---|---|---|
+| Replace in Files | Done | Folder / filter / subfolders / regex; preview via results panel; confirmation listing files and counts; open docs edited in memory (undoable); other files get `.bak` backups and can be restored with "復原檔案取代"; encoding, BOM and EOL preserved; binary and >64 MB files skipped. Runs synchronously. |
+| JSON format / minify | Done | Order-preserving; validated with serde_json, error shows line and column. |
+| XML format / minify | Done | Lightweight tokenizer; mismatched / unclosed tags reported with line numbers. No DTD/namespace validation. |
+| Modified marker follows undo | Done | Undo/redo back to the saved text clears the marker. |
+| Context menu while autocomplete open | Fixed | The popup is closed first. |
+| Typewriter mode | Done | Settings menu; caret line kept centred. |
+| Idle CPU | Improved | 30 ms ticker stops when idle; native TextInput caret replaces our blink timer. Software GL: ~12% → ~6%. |
+
 ## MadEdit features (v0.4.0)
 
 Sources: [MadEdit on SourceForge](https://sourceforge.net/projects/madedit/) ("Text/Column/Hex modes, ... WordCount"), the [MadEdit-Mod README](https://github.com/LiMinggang/MadEdit-Mod) feature list, and the menu strings in `src/MadEditFrame.cpp` of MadEdit-Mod.

@@ -81,6 +81,9 @@ export component AppWindow inherits Window {
     callback fif-browse();
     callback fif-run();
     callback fif-stop();
+    in-out property <bool> fif-replace: false;
+    callback fif-replace-all();
+    callback fif-replace-undo();
     // generic one-line prompt
     in-out property <bool> prompt-visible: false;
     in property <string> prompt-title;
@@ -133,6 +136,13 @@ export component AppWindow inherits Window {
     out property <length> v0-h: ev0.text-h;
     out property <length> v1-w: ev1.text-w;
     out property <length> v1-h: ev1.text-h;
+    callback layout-changed();
+    changed v0-w => { layout-changed(); }
+    changed v0-h => { layout-changed(); }
+    changed v1-w => { layout-changed(); }
+    changed v1-h => { layout-changed(); }
+    changed cell-w => { layout-changed(); }
+    changed line-h => { layout-changed(); }
     callback ed-key(int, string, bool, bool, bool) -> bool;
     callback ed-input(int, string);
     callback ed-mouse(int, int, length, length, bool, bool, bool);
@@ -455,12 +465,16 @@ export component AppWindow inherits Window {
     }
 
     if fif-visible: Dialog {
-        title: "在檔案中尋找"; x: (parent.width - 600px) / 2; y: 90px; width: 600px; height: 236px;
+        title: fif-replace ? "在檔案中取代" : "在檔案中尋找"; x: (parent.width - 640px) / 2; y: 90px; width: 640px; height: fif-replace ? 276px : 236px;
         close => { fif-visible = false; focus-editor(); }
         VerticalLayout { padding: 10px; spacing: 6px;
             HorizontalLayout { spacing: 6px;
                 Text { text: "尋找目標："; width: 70px; vertical-alignment: center; }
                 LineEdit { text <=> find-text; accepted => { fif-run(); } init => { self.focus(); } }
+            }
+            if fif-replace: HorizontalLayout { spacing: 6px;
+                Text { text: "取代為："; width: 70px; vertical-alignment: center; }
+                LineEdit { text <=> replace-text; }
             }
             HorizontalLayout { spacing: 6px;
                 Text { text: "資料夾："; width: 70px; vertical-alignment: center; }
@@ -478,7 +492,10 @@ export component AppWindow inherits Window {
                 CheckBox { text: "規則運算式"; checked <=> use-regex; }
             }
             HorizontalLayout { spacing: 4px;
-                Button { text: "全部尋找"; enabled: !fif-running; clicked => { fif-run(); } }
+                Button { text: fif-replace ? "預覽" : "全部尋找"; enabled: !fif-running; clicked => { fif-run(); } }
+                if fif-replace: Button { text: "全部取代..."; enabled: !fif-running; clicked => { fif-replace-all(); } }
+                if fif-replace: Button { text: "復原檔案取代"; clicked => { fif-replace-undo(); } }
+                CheckBox { text: "取代"; checked <=> fif-replace; }
                 Button { text: "停止"; enabled: fif-running; clicked => { fif-stop(); } }
                 Text { text: find-status; color: #a33; vertical-alignment: center; }
             }

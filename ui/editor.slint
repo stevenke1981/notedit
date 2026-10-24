@@ -49,11 +49,8 @@ export component EditorView inherits Rectangle {
     property <color> c-bracket: dark ? #5a4a20 : #ffd97a;
     property <color> c-track: dark ? #252526 : #f0f0f0;
     property <color> c-thumb: dark ? #5a5a5a : #c2c2c2;
-    property <bool> blink: true;
-    changed st => { blink = true; }
     background: dark ? #1e1e1e : #ffffff;
 
-    Timer { interval: 530ms; running: ime.has-focus; triggered => { blink = !blink; } }
 
     VerticalLayout {
         if st.title != "": Rectangle { height: 20px; background: active ? (dark ? #3a3d41 : #dde6f2) : (dark ? #2b2b2b : #ececec);
@@ -99,10 +96,13 @@ export component EditorView inherits Rectangle {
                             font-weight: t.bold ? 700 : 400; font-italic: t.italic; vertical-alignment: top; }
                         if r.fold == 2: Rectangle { y: line-h - 1px; height: 1px; background: c-gutter-fg; }
                     }
-                    for c in st.carets: Rectangle {
+                    // The primary caret is the (blinking) native cursor of the hidden IME
+                    // TextInput below, so no extra blink timer/redraws are needed.
+                    // Secondary carets and the overwrite block are drawn statically.
+                    for c[ci] in st.carets: Rectangle {
                         x: c.x; y: c.y; width: overwrite ? cell-w : 2px; height: line-h;
                         background: overwrite ? (dark ? #ffffff70 : #00000060) : c-fg;
-                        visible: blink && ime.has-focus;
+                        visible: ime.has-focus && (overwrite || ci > 0);
                     }
                     ta := TouchArea {
                         mouse-cursor: text;
@@ -132,7 +132,7 @@ export component EditorView inherits Rectangle {
                         width: self.preferred-width + 2px; height: line-h;
                         single-line: true;
                         font-family: mono; font-size: font-size; color: c-fg;
-                        text-cursor-width: 0px;
+                        text-cursor-width: overwrite || st.carets.length == 0 ? 0px : 2px;
                         key-pressed(e) => {
                             if (root.key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt)) { return accept; }
                             reject

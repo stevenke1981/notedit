@@ -3,6 +3,7 @@ slint::include_modules!();
 mod preview;
 mod highlight;
 mod search;
+mod fmt;
 mod settings;
 mod editor;
 mod textops;
@@ -40,6 +41,8 @@ struct Doc {
     encoding: &'static encoding_rs::Encoding,
     bom: bool,
     modified: bool,
+    /// text at the last load/save; undo/redo back to it clears `modified`
+    saved: Option<ropey::Rope>,
     lang: String,
     hl: highlight::Hl,
     cursor: usize, // byte offset, used for session/recovery
@@ -58,13 +61,14 @@ struct Doc {
 impl Doc {
     fn new(n: usize) -> Self {
         Doc { path: None, title: format!("new {}", n), buf: Default::default(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
-              encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), hl: Default::default(), cursor: 0, disk_stamp: None,
+              encoding: encoding_rs::UTF_8, bom: false, modified: false, saved: Some(Default::default()), lang: "text".into(), hl: Default::default(), cursor: 0, disk_stamp: None,
               folds: BTreeSet::new(), folds_ver: 0, bookmarks: BTreeSet::new(), sels: vec![Sel::caret(0)], top: 0, words: (0, BTreeSet::new()),
               fold_cache: Default::default(), hex: None }
     }
     fn text(&self) -> String { self.buf.text() }
     fn set_loaded(&mut self, text: &str) {
         self.buf.reset(text);
+        self.saved = Some(self.buf.rope.clone());
         self.folds.clear(); self.folds_ver += 1;
         self.bookmarks.clear();
         let c = self.cursor.min(text.len());
@@ -150,6 +154,8 @@ struct State {
     fif_rx: Option<std::sync::mpsc::Receiver<madops::FifMsg>>,
     fif_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     fif_root: PathBuf,
+    /// (file, .bak) pairs written by the last Replace in Files
+    rif_backups: Vec<(PathBuf, PathBuf)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -273,9 +279,10 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi("刪除空行", "", "xf:delempty"), mi("刪除空行 (含只有空白的行)", "", "xf:delblank"),
             mi("排序行 (遞減)", "", "xf:sortdesc"), mi("移除重複行", "", "xf:dedup"), sep(),
             mi("插入遞增數字...", "", "xf:number"), mi("欄位對齊...", "", "xf:align"), sep(),
-            mi("複製為十六進位字串", "", "xf:tohex"), mi("還原十六進位字串", "", "xf:fromhex")]),
+            mi("複製為十六進位字串", "", "xf:tohex"), mi("還原十六進位字串", "", "xf:fromhex"), sep(),
+            mi("JSON 格式化", "", "xf:jsonfmt"), mi("JSON 壓縮", "", "xf:jsonmin"), mi("XML 格式化", "", "xf:xmlfmt"), mi("XML 壓縮", "", "xf:xmlmin")]),
         menu("搜尋", vec![mi("尋找...", "Ctrl+F", "find"), mi("找下一個", "F3", "findnext"), mi("找上一個", "Shift+F3", "findprev"),
-            mi("取代...", "Ctrl+H", "replace"), mi("在所有開啟文件中尋找", "", "findall"), mi("在檔案中尋找...", "Ctrl+Shift+F", "fif"), sep(), mi("跳至...", "Ctrl+G", "goto"), mi("跳至對應括號", "Ctrl+B", "gotobrace"), sep(),
+            mi("取代...", "Ctrl+H", "replace"), mi("在所有開啟文件中尋找", "", "findall"), mi("在檔案中尋找...", "Ctrl+Shift+F", "fif"), mi("在檔案中取代...", "", "fifreplace"), mi("復原檔案取代", "", "fifundo"), sep(), mi("跳至...", "Ctrl+G", "goto"), mi("跳至對應括號", "Ctrl+B", "gotobrace"), sep(),
             mi("切換書籤", "Ctrl+F2", "bookmark"), mi("下一個書籤", "F2", "nextbm"), mi("上一個書籤", "Shift+F2", "prevbm"), mi("清除所有書籤", "", "clearbm")]),
         menu("檢視", vec![chk("文字模式", "", "textmode", d.hex.is_none() && !st.column_mode), chk("欄模式", "Alt+C", "columnmode", d.hex.is_none() && st.column_mode),
             chk("十六進位模式", "Alt+H", "hexmode", d.hex.is_some()), chk("拼字檢查 (英文，純文字/Markdown)", "", "spell", st.cfg.spell), sep(),chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers),
@@ -290,7 +297,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
             chk("Shift-JIS (日文)", "", "enc:sjis", d.encoding == encoding_rs::SHIFT_JIS), chk("Windows-1252 (西歐)", "", "enc:1252", d.encoding == encoding_rs::WINDOWS_1252)]),
         menu("語言", lang_items),
         menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
-            chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
+            chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("打字機模式 (游標行置中)", "", "typewriter", st.cfg.typewriter), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
             mi("開啟設定檔所在資料夾", "", "openconfig"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
         menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime")]),
@@ -317,6 +324,7 @@ struct App {
     clip: RefCell<Option<arboard::Clipboard>>,
     dirty: std::cell::Cell<bool>,
     rkey: RefCell<[(f32, f32, f32, f32); 2]>,
+    ticker: slint::Timer,
 }
 
 impl App {
@@ -423,6 +431,7 @@ impl App {
             d.cursor = rd.cursor;
             d.set_loaded(&rd.text);
             d.modified = true;
+            d.saved = None;
 
             if let Some(i) = normalized_path.as_ref().and_then(|p| st.docs.iter().position(|x| x.path.as_ref() == Some(p))) {
                 st.docs[i] = d;
@@ -640,6 +649,7 @@ impl App {
             d.encoding = enc;
             d.bom = bom;
             d.modified = false;
+            d.saved = Some(d.buf.rope.clone());
             d.hl = Default::default();
             d.disk_stamp = disk_stamp;
             for v in st.views.iter_mut().filter(|v| v.doc == idx) { v.sels = vec![Sel::caret(0)]; v.lkey.0 = usize::MAX; }
@@ -678,6 +688,7 @@ impl App {
             d.path = Some(path.clone());
             d.disk_stamp = file_watch::stamp(&path).ok();
             d.modified = false;
+            d.saved = if d.hex.is_none() { Some(d.buf.rope.clone()) } else { None };
             st.cfg.add_recent(path);
         }
         self.refresh_meta();
@@ -850,6 +861,9 @@ impl App {
                  en("複製完整路徑", "", "ctx:copypath", has_path), en("複製檔名", "", "ctx:copyname", true), en("開啟所在資料夾", "", "ctx:openfolder", has_path)]
         } else {
             if index == 1 && self.st.borrow().split { self.ed_focused(1); } else if index == 0 { self.ed_focused(0); }
+            // close an open autocomplete popup so it cannot swallow the menu
+            let vi = self.av();
+            if self.st.borrow().views[vi].ac.is_some() { self.st.borrow_mut().views[vi].ac = None; self.render(vi); }
             let (s, e) = self.selection();
             let sel = e > s;
             let st = self.st.borrow();
@@ -988,6 +1002,7 @@ impl App {
             "split" => self.toggle_split(),
             "otherview" => { let split = self.st.borrow().split; if split { let o = 1 - self.av(); self.st.borrow_mut().active = o; self.refresh_meta(); self.render_all(); ui.invoke_focus_editor(); } }
             "docmap" => { { let mut st = self.st.borrow_mut(); st.docmap = !st.docmap; } self.refresh_meta(); self.persist(); }
+            "typewriter" => { { let mut st = self.st.borrow_mut(); st.cfg.typewriter = !st.cfg.typewriter; for v in st.views.iter_mut() { v.follow = true; } } self.persist(); self.refresh_meta(); self.render_all(); }
             "autocomplete" => { { let mut st = self.st.borrow_mut(); st.autocomplete = !st.autocomplete; } self.refresh_meta(); self.persist(); }
             "foldall" => self.fold_all(true),
             "unfoldall" => self.fold_all(false),
@@ -1009,7 +1024,7 @@ impl App {
             }
             x if x.starts_with("font:") => {
                 { let mut st = self.st.borrow_mut(); st.font_family = x[5..].to_string(); }
-                self.dirty.set(true);
+                self.mark_dirty();
                 self.refresh_meta(); self.persist();
             }
             "openconfig" => { let d = settings::config_dir(); let _ = std::fs::create_dir_all(&d); open_external(&d); }
@@ -1749,7 +1764,7 @@ impl App {
             let mut sels = views[vi].sels.clone();
             let ok = if undo { d.buf.undo(&mut sels) } else { d.buf.redo(&mut sels) };
             if ok {
-                d.modified = true;
+                d.modified = d.saved.as_ref().is_none_or(|r| *r != d.buf.rope);
                 d.folds.clear(); d.folds_ver += 1;
                 let len = d.buf.len();
                 for (i, v) in views.iter_mut().enumerate().filter(|(_, v)| v.doc == di) {
@@ -2069,7 +2084,7 @@ impl App {
         let ui = self.ui();
         let (cw, lh) = self.metrics();
         let (w, h) = self.view_size(vi);
-        if w <= 1.0 || h <= 1.0 { self.dirty.set(true); }
+        if w <= 1.0 || h <= 1.0 { self.mark_dirty(); }
         self.ensure_layout(vi);
         let t0 = Instant::now();
         let mut st = self.st.borrow_mut();
@@ -2079,6 +2094,7 @@ impl App {
         let split = st.split;
         let docmap = st.docmap && !split && vi == 0;
         let active = st.view_idx() == vi;
+        let typewriter = st.cfg.typewriter;
         let State { docs, views, .. } = &mut *st;
         let v = &mut views[vi];
         let d = &mut docs[v.doc];
@@ -2095,6 +2111,7 @@ impl App {
             let ri = v.layout.row_of(&r, prim.head);
             if ri < v.top { v.top = ri; }
             if ri + 1 >= v.top + vr { v.top = (ri + 2).saturating_sub(vr).min(ri); }
+            if typewriter { v.top = ri.saturating_sub(vr / 2); }
             let row = v.layout.row(&r, ri);
             let chars = line_chars(&r, row.line);
             let col = prim.head.min(r.len_chars()) - r.line_to_char(row.line);
@@ -2113,7 +2130,7 @@ impl App {
         let last_line = v.layout.row(&r, (v.top + vr).min(nrows.saturating_sub(1))).line + 1;
         let mut done = d.hl.work(&r, last_line, 200);
         while !done && t0.elapsed() < Duration::from_millis(20) { done = d.hl.work(&r, last_line, 200); }
-        if !done { self.dirty.set(true); }
+        if !done { self.mark_dirty(); }
 
         // ---- marks: matching brackets and occurrences of the selected word
         let mut brackets: Vec<usize> = vec![];
@@ -2315,6 +2332,16 @@ impl App {
     }
 
     /// Periodic: re-render when sizes/metrics changed or highlighting is still in progress.
+    /// Start the 30 ms housekeeping timer; it stops itself once nothing is pending,
+    /// so an idle editor does not wake up (only the caret blink timer runs).
+    fn mark_dirty(&self) { self.dirty.set(true); self.kick(); }
+
+    fn kick(&self) {
+        if self.ticker.running() { return; }
+        let me = self.me.borrow().clone();
+        self.ticker.start(slint::TimerMode::Repeated, Duration::from_millis(30), move || { if let Some(a) = me.upgrade() { a.tick(); } });
+    }
+
     fn tick(&self) {
         let (cw, lh) = self.metrics();
         let split = self.st.borrow().split;
@@ -2324,6 +2351,7 @@ impl App {
             if self.dirty.get() || k != (cw, lh, w, h) { self.dirty.set(false); self.render(vi); }
         }
         self.fif_poll();
+        if !self.dirty.get() && self.st.borrow().fif_rx.is_none() { self.ticker.stop(); }
     }
 
     fn play_macro(&self, times: usize) {
@@ -2499,9 +2527,9 @@ fn main() -> Result<(), slint::PlatformError> {
         preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
         hits: vec![], font_family: if cfg.font_family.trim().is_empty() { "JetBrains Mono".into() } else { cfg.font_family.clone() },
         font_choices: detect_fonts(), ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete,
-        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), cfg };
+        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), rif_backups: vec![], cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None),
+    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
@@ -2533,6 +2561,8 @@ fn main() -> Result<(), slint::PlatformError> {
     cb!(on_fif_browse, |a| { a.fif_browse() });
     cb!(on_fif_run, |a| { a.fif_run() });
     cb!(on_fif_stop, |a| { a.fif_stop() });
+    cb!(on_fif_replace_all, |a| { a.fif_replace() });
+    cb!(on_fif_replace_undo, |a| { a.fif_replace_undo() });
     cb!(on_prompt_ok, |a, t: SharedString| { a.prompt_ok(&t) });
     cb!(on_hit_clicked, |a, i: i32| { a.hit_clicked(i.max(0) as usize) });
     cb!(on_context_request, |a, k: SharedString, i: i32| { a.context_menu(&k, i) });
@@ -2591,9 +2621,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    let a3 = app.clone();
-    let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(30), move || a3.tick());
+    app.kick();
+    cb!(on_layout_changed, |a| { a.kick() });
 
     // Periodically journal only modified buffers. Recovery never writes source
     // files; it is removed after a clean exit or once every buffer is saved.

@@ -111,3 +111,57 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
+
+/// Replace every match in a file's raw bytes, keeping its encoding, BOM and line endings.
+/// Returns `None` for binary files or when nothing matched; `Err` when the result
+/// cannot be represented in the file's encoding.
+pub fn replace_bytes(bytes: &[u8], re: &regex::Regex, rep: &str, expand: bool) -> Result<Option<(Vec<u8>, usize)>, String> {
+    if crate::hex::looks_binary(&bytes[..bytes.len().min(8192)]) { return Ok(None); }
+    let (text, enc, bom) = crate::decode(bytes);
+    let n = re.find_iter(&text).count();
+    if n == 0 { return Ok(None); }
+    let out = if expand { re.replace_all(&text, rep) } else { re.replace_all(&text, regex::NoExpand(rep)) };
+    Ok(Some((encode_raw(&out, enc, bom)?, n)))
+}
+
+pub fn encode_raw(text: &str, enc: &'static encoding_rs::Encoding, bom: bool) -> Result<Vec<u8>, String> {
+    let name = enc.name();
+    if name == "UTF-16LE" || name == "UTF-16BE" {
+        let le = name == "UTF-16LE";
+        let mut v = if bom { if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] } } else { vec![] };
+        for u in text.encode_utf16() { v.extend_from_slice(&if le { u.to_le_bytes() } else { u.to_be_bytes() }); }
+        return Ok(v);
+    }
+    let mut v = if bom && name == "UTF-8" { vec![0xEF, 0xBB, 0xBF] } else { vec![] };
+    let (b, _, err) = enc.encode(text);
+    if err { return Err(format!("{} 編碼無法表示取代後的字元", name)); }
+    v.extend_from_slice(&b);
+    Ok(v)
+}
+
+/// Files under `root` that contain at least one match, with their match count.
+pub fn matching_files(root: &Path, filters: &str, recursive: bool, re: &regex::Regex) -> Vec<(PathBuf, usize)> {
+    let mut out: Vec<(PathBuf, usize)> = vec![];
+    let cancel = Arc::new(AtomicBool::new(false));
+    search(root, filters, recursive, re, &cancel, usize::MAX, |b| for h in b {
+        match out.last_mut() { Some((p, n)) if *p == h.path => *n += 1, _ => out.push((h.path, 1)) }
+    });
+    out
+}
+
+#[cfg(test)]
+mod rtests {
+    use super::*;
+    #[test]
+    fn replace_keeps_crlf_and_bom() {
+        let re = regex::Regex::new("a(b)").unwrap();
+        let src = b"\xEF\xBB\xBFab x\r\nab\r\n";
+        let (out, n) = replace_bytes(src, &re, "[$1]", true).unwrap().unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(out, b"\xEF\xBB\xBF[b] x\r\n[b]\r\n");
+        let (out, _) = replace_bytes(b"ab", &re, "$1", false).unwrap().unwrap();
+        assert_eq!(out, b"$1");
+        assert!(replace_bytes(b"ab\0\0\0", &re, "x", false).unwrap().is_none());
+        assert!(replace_bytes(b"zz", &re, "x", false).unwrap().is_none());
+    }
+}
