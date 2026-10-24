@@ -1,7 +1,7 @@
 [package]
 license = "MIT"
 name = "notedit"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.92"
 
@@ -9,8 +9,10 @@ rust-version = "1.92"
 arboard = { version = "3", default-features = false }
 chardetng = "1.0.0"
 encoding_rs = "0.8.35"
+ferrous-opencc = "0.4.0"
 fontdb = "0.22"
 i-slint-backend-winit = "=1.18.1"
+memmap2 = "0.9.12"
 pulldown-cmark = { version = "0.12", default-features = false }
 regex = "1.13.1"
 rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
@@ -18,6 +20,7 @@ ropey = "1.6"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
 slint = "=1.18.1"
+spellbook = "0.4.2"
 syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing", "html", "yaml-load"] }
 unicode-width = "0.2"
 winit = { version = "0.30", default-features = false }

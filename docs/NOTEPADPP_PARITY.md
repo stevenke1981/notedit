@@ -7,7 +7,7 @@ NotEdit is intentionally cross-platform and Rust + Slint based. "Parity" therefo
 
 ## Current baseline
 
-Already implemented in NotEdit v0.3.0:
+Already implemented in NotEdit v0.4.0 (see the MadEdit section below for v0.4.0 additions):
 
 - multi-tab editing, drag/drop and tab reorder
 - syntax highlighting with syntect
@@ -23,6 +23,32 @@ Already implemented in NotEdit v0.3.0:
 - release builds for Windows, Linux and macOS
 - v0.3.0: custom ropey-based editor surface (`src/editor.rs` headless core + `ui/editor.slint`): wrap with highlighting, folding, split/clone view, multi-caret + column selection, autocomplete, bookmarks, document map, macro recording of shortcuts and menu actions
 
+## MadEdit features (v0.4.0)
+
+Sources: [MadEdit on SourceForge](https://sourceforge.net/projects/madedit/) ("Text/Column/Hex modes, ... WordCount"), the [MadEdit-Mod README](https://github.com/LiMinggang/MadEdit-Mod) feature list, and the menu strings in `src/MadEditFrame.cpp` of MadEdit-Mod.
+
+| MadEdit feature | NotEdit v0.4.0 | Notes |
+|---|---|---|
+| Hex mode (edit, insert) | Implemented (`src/hex.rs`, `src/hexview.rs`) | offset / hex / ASCII columns, overwrite + insert, undo/redo, hex-string copy/paste |
+| Large files | Implemented | binary → hex; > 512 MB → mmap hex (overwrite only); 140 MB text opens in ~1 s |
+| Column mode | Implemented | Alt+C toggle |
+| Text / Column / Hex mode switch | Implemented | View menu radio items |
+| Chinese conversion (Trad ↔ Simp) | Implemented (ferrous-opencc s2twp / tw2sp) | file/selection; MadEdit's clipboard variants and Kanji conversion not added |
+| To fullwidth / halfwidth | Implemented | |
+| Space ↔ Tab | Implemented | tab width 4 |
+| Word count (CJK aware) | Implemented | |
+| Find / Replace in Files | Find implemented; Replace in Files missing | |
+| Search in all open documents | Implemented (since v0.2) | |
+| Spell check (suggestions, ignore, dictionary) | Implemented for en_US, text/Markdown only | no personal-dictionary editor |
+| Copy as hex string / revert hex string | Implemented | |
+| Insert incremental numbers, column align | Implemented | |
+| Join lines, delete empty lines, trim leading/trailing | Implemented | |
+| Capitalize, invert case | Implemented | |
+| Bookmarks | Implemented; copy/cut/delete bookmarked lines missing | |
+| Highlight word | Implemented (mark-all on selection) | |
+| Markdown / HTML preview | Implemented (since v0.1) | |
+| Typewriter mode, auto backup, Python macros, JSON/XML/Astyle formatters, Pan-Chinese search | Missing | |
+
 ## Priority matrix
 
 | Priority | Capability | Current state | Target acceptance criteria |
@@ -32,14 +58,14 @@ Already implemented in NotEdit v0.3.0:
 | P0 | External file-change detection | Implemented (#4) | Detect changed/deleted files, offer reload/keep choices, and surface recovery-vs-disk conflicts |
 | P0 | Lossless legacy-encoding saves | Implemented (#6) | Refuse writes that would replace unrepresentable characters; regression tests cover legacy and Unicode encodings |
 | P0 | Large-file behavior | Implemented (v0.3.0) | ropey buffer + custom virtualized editor surface; incremental, time-budgeted highlighting |
-| P1 | Find in Files | Missing | Folder scope, filters, regex, recursive mode, result panel, click-to-open |
+| P1 | Find in Files | Implemented (v0.4.0) | Folder scope, filters, regex, recursive mode, result panel, click-to-open |
 | P1 | Folder as Workspace | Missing | Tree panel, refresh, open/rename/create/delete with safe confirmation |
 | P1 | Function List | Missing | Language-aware symbol extraction, filter, click-to-navigate |
 | P1 | Auto-completion | Implemented (v0.3.0) | Word completion plus language keywords; keyboard navigation; configurable enable/disable |
 | P1 | Bookmarks + search marks | Partial (v0.3.0: bookmarks, mark-all occurrences of selected word) | Toggle/navigate bookmarks and mark-all search hits |
 | P2 | Dual/split view | Partial (v0.3.0: clone into second view; move-to-other-view missing) | Move or clone a document into a second synchronized editor view |
 | P2 | Multi-selection / multi-caret | Implemented (v0.3.0) | Multiple carets and simultaneous edits with correct undo grouping |
-| P2 | Column mode | Partial (v0.3.0: Alt+drag / Alt+Shift+arrows; no column editor dialog) | Rectangular selection/edit with status reporting |
+| P2 | Column mode | Implemented (v0.4.0: column-mode toggle Alt+C, Alt+drag, Alt+Shift+arrows, incremental numbering) | Rectangular selection/edit with status reporting |
 | P2 | Code folding | Implemented (v0.3.0: bracket/indent based) | Fold/unfold scopes with visible gutter controls and preserved navigation |
 | P2 | Document Map | Implemented (v0.3.0) | Minimap/document overview with viewport indicator |
 | P2 | Tab management parity | Partial | pin tabs, sort tabs, close unchanged/left/right, MRU switcher |

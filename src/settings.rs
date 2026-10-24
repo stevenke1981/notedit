@@ -21,12 +21,14 @@ pub struct Settings {
     pub macro_keys: Vec<String>,
     pub docmap: bool,
     pub autocomplete: bool,
+    pub spell: bool,
+    pub spell_ignore: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings { font: 14.0, font_family: "JetBrains Mono".into(), wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
-                   recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![], docmap: false, autocomplete: true }
+                   recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![], docmap: false, autocomplete: true, spell: false, spell_ignore: vec![] }
     }
 }
 

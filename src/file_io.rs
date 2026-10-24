@@ -36,6 +36,12 @@ fn create_sibling_temp(path: &Path) -> io::Result<(PathBuf, File)> {
 /// Existing permissions are copied to the staged file when possible. The
 /// temporary file is fsync'd before it replaces the destination.
 pub fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    durable_write_with(path, |f| f.write_all(bytes))
+}
+
+/// Like [`durable_write`], but the contents are streamed by `fill` (used for
+/// huge memory-mapped files in hex mode).
+pub fn durable_write_with(path: &Path, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     let old_metadata = fs::metadata(path).ok();
     if old_metadata.as_ref().is_some_and(|m| m.permissions().readonly()) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, "destination is read-only"));
@@ -44,7 +50,7 @@ pub fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let (temp, mut file) = create_sibling_temp(path)?;
 
     let staged = (|| -> io::Result<()> {
-        file.write_all(bytes)?;
+        fill(&mut file)?;
         file.flush()?;
         file.sync_all()?;
         if let Some(permissions) = old_permissions {

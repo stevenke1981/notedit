@@ -72,6 +72,22 @@ export component AppWindow inherits Window {
     in-out property <bool> find-visible: false;
     in-out property <bool> replace-mode: false;
     in-out property <bool> goto-visible: false;
+    // find in files
+    in-out property <bool> fif-visible: false;
+    in-out property <string> fif-dir;
+    in-out property <string> fif-filter: "*.*";
+    in-out property <bool> fif-recursive: true;
+    in property <bool> fif-running: false;
+    callback fif-browse();
+    callback fif-run();
+    callback fif-stop();
+    // generic one-line prompt
+    in-out property <bool> prompt-visible: false;
+    in property <string> prompt-title;
+    in property <string> prompt-label;
+    in-out property <string> prompt-text;
+    callback prompt-ok(string);
+    in property <bool> hex-mode: false;
     in-out property <bool> about-visible: false;
     in property <string> find-status;
     in-out property <string> find-text;
@@ -157,6 +173,7 @@ export component AppWindow inherits Window {
                 if ((e.text == "r" || e.text == "R") && e.modifiers.shift) { menu-action("macrorec"); return accept; }
                 if ((e.text == "p" || e.text == "P") && e.modifiers.shift) { menu-action("macroplay"); return accept; }
                 if ((e.text == "s" || e.text == "S") && e.modifiers.shift) { menu-action("saveas"); return accept; }
+                if ((e.text == "f" || e.text == "F") && e.modifiers.shift) { menu-action("fif"); return accept; }
                 if (e.text == "s") { menu-action("save"); return accept; }
                 if (e.text == "o") { menu-action("open"); return accept; }
                 if (e.text == "n") { menu-action("new"); return accept; }
@@ -175,10 +192,12 @@ export component AppWindow inherits Window {
             }
             if (e.modifiers.control && e.modifiers.alt && (e.text == "f" || e.text == "F")) { menu-action("foldcur"); return accept; }
             if (e.modifiers.alt && !e.modifiers.control && (e.text == "0" || e.text == ")")) { menu-action(e.modifiers.shift ? "unfoldall" : "foldall"); return accept; }
+            if (e.modifiers.alt && !e.modifiers.control && (e.text == "h" || e.text == "H")) { menu-action(hex-mode ? "textmode" : "hexmode"); return accept; }
+            if (e.modifiers.alt && !e.modifiers.control && (e.text == "c" || e.text == "C")) { menu-action("columnmode"); return accept; }
             if (e.text == Key.F8) { menu-action("otherview"); return accept; }
             if (e.text == Key.F3) { find-next(!e.modifiers.shift); return accept; }
             if (e.text == Key.Insert) { menu-action("toggleovr"); return accept; }
-            if (e.text == Key.Escape) { find-visible = false; goto-visible = false; hits-visible = false; about-visible = false; open-menu = -1; ctx-visible = false; rename-visible = false; focus-editor(); return accept; }
+            if (e.text == Key.Escape) { fif-visible = false; prompt-visible = false; find-visible = false; goto-visible = false; hits-visible = false; about-visible = false; open-menu = -1; ctx-visible = false; rename-visible = false; focus-editor(); return accept; }
             reject
         }
 
@@ -432,6 +451,47 @@ export component AppWindow inherits Window {
                 if replace-mode: Button { text: "全部取代"; clicked => { replace-all(); } }
             }
             Text { text: find-status; color: #a33; }
+        }
+    }
+
+    if fif-visible: Dialog {
+        title: "在檔案中尋找"; x: (parent.width - 600px) / 2; y: 90px; width: 600px; height: 236px;
+        close => { fif-visible = false; focus-editor(); }
+        VerticalLayout { padding: 10px; spacing: 6px;
+            HorizontalLayout { spacing: 6px;
+                Text { text: "尋找目標："; width: 70px; vertical-alignment: center; }
+                LineEdit { text <=> find-text; accepted => { fif-run(); } init => { self.focus(); } }
+            }
+            HorizontalLayout { spacing: 6px;
+                Text { text: "資料夾："; width: 70px; vertical-alignment: center; }
+                LineEdit { text <=> fif-dir; }
+                Button { text: "瀏覽..."; clicked => { fif-browse(); } }
+            }
+            HorizontalLayout { spacing: 6px;
+                Text { text: "檔案類型："; width: 70px; vertical-alignment: center; }
+                LineEdit { text <=> fif-filter; placeholder-text: "*.rs;*.txt"; }
+            }
+            HorizontalLayout { spacing: 6px;
+                CheckBox { text: "包含子資料夾"; checked <=> fif-recursive; }
+                CheckBox { text: "大小寫須相符"; checked <=> match-case; }
+                CheckBox { text: "全字拼寫須相符"; checked <=> whole-word; }
+                CheckBox { text: "規則運算式"; checked <=> use-regex; }
+            }
+            HorizontalLayout { spacing: 4px;
+                Button { text: "全部尋找"; enabled: !fif-running; clicked => { fif-run(); } }
+                Button { text: "停止"; enabled: fif-running; clicked => { fif-stop(); } }
+                Text { text: find-status; color: #a33; vertical-alignment: center; }
+            }
+        }
+    }
+
+    if prompt-visible: Dialog {
+        title: prompt-title; x: (parent.width - 380px) / 2; y: 120px; width: 380px; height: 130px;
+        close => { prompt-visible = false; focus-editor(); }
+        VerticalLayout { padding: 10px; spacing: 8px;
+            Text { text: prompt-label; }
+            pe := LineEdit { text <=> prompt-text; accepted(t) => { prompt-visible = false; prompt-ok(t); } init => { self.focus(); } }
+            Button { text: "確定"; clicked => { prompt-visible = false; prompt-ok(pe.text); } }
         }
     }
 

@@ -93,8 +93,8 @@ export component EditorView inherits Rectangle {
                     for r[i] in st.rows: Rectangle {
                         y: i * line-h; height: line-h; width: parent.width;
                         background: r.cur ? c-curline : transparent;
-                        for s in r.rects: Rectangle { x: s.x; width: s.w; height: line-h;
-                            background: s.kind == 0 ? c-sel : s.kind == 1 ? c-mark : s.kind == 2 ? c-bracket : #ffa50060; }
+                        for s in r.rects: Rectangle { x: s.x; width: s.w; y: s.kind == 4 ? line-h - 2px : 0; height: s.kind == 4 ? 1.5px : line-h;
+                            background: s.kind == 0 ? c-sel : s.kind == 1 ? c-mark : s.kind == 2 ? c-bracket : s.kind == 4 ? #e02020 : s.kind == 5 ? #4080ff38 : #ffa50060; }
                         for t in r.toks: Text { x: t.x; y: 0; text: t.text; color: t.color; font-family: mono; font-size: font-size;
                             font-weight: t.bold ? 700 : 400; font-italic: t.italic; vertical-alignment: top; }
                         if r.fold == 2: Rectangle { y: line-h - 1px; height: 1px; background: c-gutter-fg; }

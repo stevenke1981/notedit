@@ -14,6 +14,20 @@
 
 ## 功能
 
+### v0.4.0：MadEdit 功能
+
+參考 [MadEdit](https://sourceforge.net/projects/madedit/) / [MadEdit-Mod](https://github.com/LiMinggang/MadEdit-Mod) 加入：
+
+- **十六進位模式**（檢視 → 十六進位模式，Alt+H）：位移欄、16 位元組十六進位欄與 ASCII 欄；Tab 在兩欄間切換；直接輸入十六進位數字或字元覆寫位元組，Insert 切換插入 / 覆寫，Delete / Backspace 刪除位元組；Shift+方向鍵或拖曳選取，Ctrl+C 複製為十六進位字串、Ctrl+V 貼上十六進位字串；獨立的復原 / 取消復原；可隨時切回文字模式
+- **大檔案 / 二進位檔**：偵測為二進位的檔案直接以十六進位模式開啟；超過 512 MB 的檔案以記憶體映射（mmap）開啟，只讀取可見範圍（600 MB 檔案約 1 秒內開啟，可覆寫位元組並儲存）；140 MB 文字檔可直接以文字模式編輯
+- **欄模式**（檢視 → 欄模式，Alt+C）：一般拖曳與 Shift+方向鍵即為矩形選取
+- **轉換選單**：繁體 ↔ 簡體（OpenCC 詞彙轉換，如「軟體 ↔ 软件」）、全形 ↔ 半形、Tab ↔ 空白、字首大寫、大小寫互換、移除行首（及行尾）空白、合併行、刪除空行（含只有空白的行）、遞減排序、移除重複行、插入遞增數字、欄位對齊、複製為十六進位字串 / 還原十六進位字串（接受 `4D6F64`、`4D 6F 64`、`%4D%6F%64`、`4D,6F,64`）；有選取時只轉換選取範圍
+- **字數統計**（工具 → 字數統計）：中日韓文字每字計一個字，另列字元、空白、中日韓、半形 / 全形、行數、位元組
+- **在檔案中尋找**（搜尋 → 在檔案中尋找，Ctrl+Shift+F）：資料夾、檔案類型篩選（`*.rs;*.md`）、包含子資料夾、規則運算式 / 大小寫 / 全字；背景執行可停止，結果即時加入結果面板，點擊即開啟檔案並跳至該處（略過 .git、target、node_modules 與二進位檔）
+- **拼字檢查**（檢視 → 拼字檢查）：內建 en_US Hunspell 字典（spellbook），純文字 / Markdown 中錯字加紅色底線，右鍵選單提供建議字與「忽略」（忽略清單會保存）
+
+### 既有功能
+
 - **自製編輯器元件（v0.3.0）**：以 ropey 作為文字緩衝區，自行排版、繪製與處理輸入（不再疊加 TextInput），大檔案（10 MB / 20 萬行）仍可流暢捲動與編輯；游標閃爍、IME 輸入法支援
 - **自動換行**：換行時仍保留語法上色與行號
 - **程式碼摺疊**：依括號或縮排判斷區塊，行號旁有摺疊邊界（⊟ / ⊞），Alt+0 全部摺疊、Alt+Shift+0 全部展開、Ctrl+Alt+F 摺疊目前區塊
@@ -65,11 +79,13 @@ NotEdit 會以目前 Notepad++ 的實際能力作為功能對照，而不是只�
 
 ## 已知限制（相較 Notepad++）
 
-- 尚無外掛系統、在檔案中尋找、資料夾工作區、函式清單
+- 尚無外掛系統、資料夾工作區、函式清單
+- 十六進位模式下，記憶體映射的大型檔案只能覆寫位元組（不能插入 / 刪除）；拼字檢查僅英文，且只檢查純文字 / Markdown
+- 尚未加入 MadEdit 的 Python 巨集、打字機模式、JSON/XML 格式化、書籤行的複製 / 剪下
 - 分割檢視為「複製文件」模式（兩邊顯示同一份文件），尚不支援把不同文件移到另一個檢視
 - 編輯器以等寬字格排版；比例字型或連字（ligature）不會依實際寬度顯示
 - 列印透過瀏覽器的列印功能；預覽為簡化版（不支援 CSS、圖片）
 
 ## 授權
 
-MIT License，詳見 [LICENSE](LICENSE)。內嵌字型：JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）、DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`）。
+MIT License，詳見 [LICENSE](LICENSE)。拼字字典 en_US 來自 SCOWL / wooorm/dictionaries（`assets/dict/LICENSE-en_US.txt`）；繁簡轉換使用 ferrous-opencc（Apache-2.0）。內嵌字型：JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）、DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`）。

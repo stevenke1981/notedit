@@ -5,6 +5,12 @@ mod highlight;
 mod search;
 mod settings;
 mod editor;
+mod textops;
+mod hex;
+mod fif;
+mod spell;
+mod hexview;
+mod madops;
 mod file_io;
 mod recovery;
 mod file_watch;
@@ -46,6 +52,7 @@ struct Doc {
     top: usize,
     words: (u64, BTreeSet<String>),
     fold_cache: RefCell<(u64, HashMap<usize, Option<usize>>)>,
+    hex: Option<Box<hexview::HexState>>,
 }
 
 impl Doc {
@@ -53,7 +60,7 @@ impl Doc {
         Doc { path: None, title: format!("new {}", n), buf: Default::default(), eol: if cfg!(windows) { Eol::Crlf } else { Eol::Lf },
               encoding: encoding_rs::UTF_8, bom: false, modified: false, lang: "text".into(), hl: Default::default(), cursor: 0, disk_stamp: None,
               folds: BTreeSet::new(), folds_ver: 0, bookmarks: BTreeSet::new(), sels: vec![Sel::caret(0)], top: 0, words: (0, BTreeSet::new()),
-              fold_cache: Default::default() }
+              fold_cache: Default::default(), hex: None }
     }
     fn text(&self) -> String { self.buf.text() }
     fn set_loaded(&mut self, text: &str) {
@@ -137,6 +144,12 @@ struct State {
     active: usize,
     docmap: bool,
     autocomplete: bool,
+    column_mode: bool,
+    prompt_kind: String,
+    file_hits: Vec<(PathBuf, usize, usize, usize)>,
+    fif_rx: Option<std::sync::mpsc::Receiver<madops::FifMsg>>,
+    fif_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    fif_root: PathBuf,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -252,10 +265,20 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi("複製目前行", "Ctrl+D", "dupline"), mi("刪除目前行", "", "delline"), mi("轉成大寫", "", "upper"), mi("轉成小寫", "", "lower"),
             mi("移除行尾空白", "", "trimtrail"), mi("排序行 (遞增)", "", "sortlines"), sep(),
             mi("換行格式 → Windows (CR LF)", "", "eol:crlf"), mi("換行格式 → Unix (LF)", "", "eol:lf"), mi("換行格式 → Macintosh (CR)", "", "eol:cr")]),
+        menu("轉換", vec![mi("繁體 → 簡體", "", "xf:t2s"), mi("簡體 → 繁體 (台灣用語)", "", "xf:s2t"), sep(),
+            mi("轉成全形", "", "xf:full"), mi("轉成半形", "", "xf:half"), sep(),
+            mi("Tab → 空白", "", "xf:tab2sp"), mi("空白 → Tab (行首)", "", "xf:sp2tab"), sep(),
+            mi("字首大寫", "", "xf:cap"), mi("大小寫互換", "", "xf:invert"), sep(),
+            mi("移除行首空白", "", "xf:trimlead"), mi("移除行首及行尾空白", "", "xf:trimboth"), mi("合併行", "", "xf:join"),
+            mi("刪除空行", "", "xf:delempty"), mi("刪除空行 (含只有空白的行)", "", "xf:delblank"),
+            mi("排序行 (遞減)", "", "xf:sortdesc"), mi("移除重複行", "", "xf:dedup"), sep(),
+            mi("插入遞增數字...", "", "xf:number"), mi("欄位對齊...", "", "xf:align"), sep(),
+            mi("複製為十六進位字串", "", "xf:tohex"), mi("還原十六進位字串", "", "xf:fromhex")]),
         menu("搜尋", vec![mi("尋找...", "Ctrl+F", "find"), mi("找下一個", "F3", "findnext"), mi("找上一個", "Shift+F3", "findprev"),
-            mi("取代...", "Ctrl+H", "replace"), mi("在所有開啟文件中尋找", "", "findall"), sep(), mi("跳至...", "Ctrl+G", "goto"), mi("跳至對應括號", "Ctrl+B", "gotobrace"), sep(),
+            mi("取代...", "Ctrl+H", "replace"), mi("在所有開啟文件中尋找", "", "findall"), mi("在檔案中尋找...", "Ctrl+Shift+F", "fif"), sep(), mi("跳至...", "Ctrl+G", "goto"), mi("跳至對應括號", "Ctrl+B", "gotobrace"), sep(),
             mi("切換書籤", "Ctrl+F2", "bookmark"), mi("下一個書籤", "F2", "nextbm"), mi("上一個書籤", "Shift+F2", "prevbm"), mi("清除所有書籤", "", "clearbm")]),
-        menu("檢視", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers),
+        menu("檢視", vec![chk("文字模式", "", "textmode", d.hex.is_none() && !st.column_mode), chk("欄模式", "Alt+C", "columnmode", d.hex.is_none() && st.column_mode),
+            chk("十六進位模式", "Alt+H", "hexmode", d.hex.is_some()), chk("拼字檢查 (英文，純文字/Markdown)", "", "spell", st.cfg.spell), sep(),chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers),
             chk("HTML / Markdown 預覽", "", "preview", st.preview), chk("文件地圖", "", "docmap", st.docmap), sep(),
             chk("分割檢視 (複製文件到另一個檢視)", "", "split", st.split), en("切換到另一個檢視", "F8", "otherview", st.split), sep(),
             mi("摺疊 / 展開目前區塊", "Ctrl+Alt+F", "foldcur"), mi("全部摺疊", "Alt+0", "foldall"), mi("全部展開", "Alt+Shift+0", "unfoldall"), sep(),
@@ -270,7 +293,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
             mi("開啟設定檔所在資料夾", "", "openconfig"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
-        menu("工具", vec![mi("統計 (字數/行數)", "", "stats"), mi("插入日期時間", "", "datetime")]),
+        menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime")]),
         menu("巨集", vec![chk(if st.macro_rec { "停止錄製" } else { "開始錄製" }, "Ctrl+Shift+R", "macrorec", st.macro_rec),
             mi(&format!("播放 ({} 個動作)", st.macro_buf.len()), "Ctrl+Shift+P", "macroplay"), mi("重複播放 10 次", "", "macroplay10"), mi("清除巨集", "", "macroclear")]),
         menu("執行", vec![mi("在預設瀏覽器中開啟", "", "runbrowser"), mi("開啟所在資料夾", "", "openfolder")]),
@@ -324,7 +347,7 @@ impl App {
 
     fn recovery_session(&self) -> recovery::RecoverySession {
         let st = self.st.borrow();
-        let docs = st.docs.iter().filter(|d| d.modified).map(|d| {
+        let docs = st.docs.iter().filter(|d| d.modified && d.hex.is_none()).map(|d| {
             let disk_len = d.disk_stamp.as_ref().map(|s| s.len);
             let disk_modified_ns = d.disk_stamp.as_ref()
                 .and_then(|s| s.modified.as_ref())
@@ -448,7 +471,11 @@ impl App {
         let ad = &st.docs[st.views[st.view_idx()].doc];
         let lines = ad.buf.rope.len_lines();
         let display_len = ad.buf.len() + if ad.eol == Eol::Crlf { lines - 1 } else { 0 };
-        ui.set_st_length(format!("length : {}    lines : {}", display_len, lines).into());
+        match &ad.hex {
+            Some(h) => ui.set_st_length(format!("bytes : {}    [HEX]", h.buf.len()).into()),
+            None => ui.set_st_length(format!("length : {}    lines : {}{}", display_len, lines, if st.column_mode { "    [欄模式]" } else { "" }).into()),
+        }
+        ui.set_hex_mode(ad.hex.is_some());
         ui.set_total_lines(lines as i32);
     }
 
@@ -456,7 +483,7 @@ impl App {
         let docs: Vec<_> = {
             let st = self.st.borrow();
             st.docs.iter().enumerate().filter_map(|(i, d)| {
-                d.path.clone().map(|p| (i, p, d.disk_stamp.clone(), d.modified, d.title.clone()))
+                d.path.clone().filter(|_| d.hex.is_none()).map(|p| (i, p, d.disk_stamp.clone(), d.modified, d.title.clone()))
             }).collect()
         };
 
@@ -527,6 +554,18 @@ impl App {
     }
 
     fn open_path(&self, path: PathBuf) {
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let already = { let cp = std::fs::canonicalize(&path).unwrap_or(path.clone()); self.st.borrow().docs.iter().position(|d| d.path.as_ref() == Some(&cp)) };
+        if let Some(i) = already { self.remember_cursor(); self.st.borrow_mut().cur = i; self.refresh_all(); return; }
+        // binary or huge files open in hex mode (memory-mapped when large)
+        let sample = { use std::io::Read; let mut b = vec![0u8; 8192]; std::fs::File::open(&path).and_then(|mut f| f.read(&mut b)).map(|n| { b.truncate(n); b }).unwrap_or_default() };
+        if size > HUGE_TEXT || hex::looks_binary(&sample) {
+            let buf = if size > 64 << 20 { hex::HexBuf::map(&path) } else { std::fs::read(&path).map(hex::HexBuf::from_vec) };
+            match buf {
+                Ok(b) => { self.open_hex(path, b); return; }
+                Err(e) => { msg(&format!("無法開啟檔案：{}", e)); return; }
+            }
+        }
         let bytes = match std::fs::read(&path) { Ok(b) => b, Err(e) => { msg(&format!("無法開啟檔案：{}", e)); return; } };
         let (s, enc, bom) = decode(&bytes);
         let eol = detect_eol(&s);
@@ -548,6 +587,24 @@ impl App {
                 else { st.docs.push(d); st.cur = st.docs.len() - 1; }
                 if matches!(st.docs[st.cur].lang.as_str(), "markdown" | "html") { st.preview = true; }
             }
+        }
+        self.refresh_all();
+    }
+
+    fn open_hex(&self, path: PathBuf, buf: hex::HexBuf) {
+        self.remember_cursor();
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        {
+            let mut st = self.st.borrow_mut();
+            st.cfg.add_recent(path.clone());
+            let mut d = Doc::new(0);
+            d.title = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            d.disk_stamp = file_watch::stamp(&path).ok();
+            d.path = Some(path);
+            d.hex = Some(Box::new(hexview::HexState::new(buf)));
+            let c = st.cur;
+            if st.docs[c].path.is_none() && !st.docs[c].modified && st.docs[c].buf.len() == 0 && st.docs[c].hex.is_none() { st.docs[c] = d; }
+            else { st.docs.push(d); st.cur = st.docs.len() - 1; }
         }
         self.refresh_all();
     }
@@ -577,6 +634,7 @@ impl App {
             let is_current = st.cur == idx;
             if is_current { st.store_view0(); }
             let d = &mut st.docs[idx];
+            d.hex = None;
             d.set_loaded(&text);
             d.eol = eol;
             d.encoding = enc;
@@ -602,11 +660,16 @@ impl App {
             }
         };
         let Some(path) = path else { return false };
+        if self.st.borrow().docs[idx].hex.is_some() {
+            let r = self.st.borrow_mut().docs[idx].hex.as_mut().unwrap().buf.save(&path);
+            if let Err(e) = r { msg(&format!("儲存失敗：{}", e)); return false; }
+        } else {
         let bytes = match encode(&self.st.borrow().docs[idx]) {
             Ok(bytes) => bytes,
             Err(e) => { msg(&e); return false; }
         };
         if let Err(e) = file_io::durable_write(&path, &bytes) { msg(&format!("儲存失敗：{}", e)); return false; }
+        }
         {
             let mut st = self.st.borrow_mut();
             let d = &mut st.docs[idx];
@@ -698,12 +761,13 @@ impl App {
             }
             ui.set_hits_title(format!("搜尋「{}」：在 {} 個文件中找到 {} 筆", ui.get_find_text(), st.docs.len(), rows.len()).into());
         }
-        self.st.borrow_mut().hits = hits;
+        { let mut st = self.st.borrow_mut(); st.hits = hits; st.file_hits.clear(); }
         ui.set_hits(ModelRc::new(VecModel::from(rows)));
         ui.set_hits_visible(true);
     }
 
     fn hit_clicked(&self, i: usize) {
+        if !self.st.borrow().file_hits.is_empty() { self.file_hit_clicked(i); return; }
         let Some(&(d, s, e)) = self.st.borrow().hits.get(i) else { return };
         if d != self.cd() { if self.av() == 1 { self.st.borrow_mut().active = 0; } self.select_tab(d); }
         let ok = { let t = self.text(); e <= t.len() && t.is_char_boundary(s) && t.is_char_boundary(e) };
@@ -791,13 +855,16 @@ impl App {
             let st = self.st.borrow();
             let d = &st.docs[st.views[st.view_idx()].doc];
             let pv = matches!(d.lang.as_str(), "markdown" | "html" | "xml");
-            vec![en("復原", "Ctrl+Z", "undo", d.buf.can_undo()), en("取消復原", "Ctrl+Y", "redo", d.buf.can_redo()), sep(),
+            let spell_items = { drop(st); self.spell_items() };
+            let st = self.st.borrow();
+            let d = &st.docs[st.views[st.view_idx()].doc];
+            spell_items.into_iter().chain([en("復原", "Ctrl+Z", "undo", d.buf.can_undo()), en("取消復原", "Ctrl+Y", "redo", d.buf.can_redo()), sep(),
                  en("剪下", "Ctrl+X", "cut", sel), en("複製", "Ctrl+C", "copy", sel), en("貼上", "Ctrl+V", "paste", true), en("刪除", "Del", "delete", sel), en("全選", "Ctrl+A", "selectall", d.buf.len() > 0), sep(),
                  en("轉成大寫", "", "upper", sel), en("轉成小寫", "", "lower", sel), en("複製目前行", "Ctrl+D", "dupline", true), en("刪除目前行", "", "delline", true), sep(),
                  en("註解 / 取消註解", "Ctrl+Q", "comment", comment_syntax(&d.lang).is_some()), en("搜尋選取的文字", "", "searchsel", sel), sep(),
                  mi("切換書籤", "Ctrl+F2", "bookmark"), mi("全部摺疊", "", "foldall"), mi("全部展開", "", "unfoldall"),
                  chk(if st.split { "關閉分割檢視" } else { "複製到另一個檢視 (分割)" }, "", "split", st.split), sep(),
-                 chk(if st.preview { "關閉預覽" } else { "開啟預覽" }, "", "preview", false)].into_iter().map(|mut m| { if m.action == "preview" { m.enabled = pv; } m }).collect()
+                 chk(if st.preview { "關閉預覽" } else { "開啟預覽" }, "", "preview", false)]).map(|mut m| { if m.action == "preview" { m.enabled = pv; } m }).collect()
         };
         ui.set_ctx_items(ModelRc::new(VecModel::from(items)));
         ui.set_ctx_visible(true);
@@ -895,6 +962,13 @@ impl App {
         let ui = self.ui();
         if !a.starts_with("macro") && !matches!(a, "none" | "open" | "save" | "saveas" | "exit" | "about" | "find" | "replace" | "goto") { self.record(format!("a:{a}")); }
         let cur = self.cd();
+        if self.is_hex(self.av()) {
+            let k = match a { "undo" => "z", "redo" => "y", "copy" => "c", "cut" => "c", "paste" => "v", "selectall" => "a", _ => "" };
+            if !k.is_empty() { self.hex_key(self.av(), k, true, false, false); self.refresh_status(); return; }
+            if matches!(a, "upper" | "lower" | "trimtrail" | "sortlines" | "dupline" | "delline" | "comment" | "find" | "replace" | "findnext" | "findprev" | "goto" | "datetime") || a.starts_with("xf:") {
+                msg("十六進位模式下不支援此功能，請先切換回文字模式 (Alt+H)。"); return;
+            }
+        }
         match a {
             "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
@@ -1009,10 +1083,7 @@ impl App {
             "preview" => { { let mut st = self.st.borrow_mut(); st.preview = !st.preview; } self.refresh_meta(); self.refresh_preview(); }
             "zoomreset" => { { let mut st = self.st.borrow_mut(); st.font = 14.0; } self.refresh_meta(); }
             "toggleovr" => { { let mut st = self.st.borrow_mut(); st.overwrite = !st.overwrite; } self.refresh_meta(); }
-            "stats" => {
-                let t = &self.text();
-                msg(&format!("字元數：{}\n字數：{}\n行數：{}\n位元組 (UTF-8)：{}", t.chars().count(), t.split_whitespace().count(), t.matches('\n').count() + 1, t.len()));
-            }
+            "stats" => { self.mad_action("wordcount"); }
             "datetime" => {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
                 let stamp = format_unix(now);
@@ -1026,7 +1097,7 @@ impl App {
                 } else { msg("請先儲存檔案。"); }
             }
             "about" => ui.set_about_visible(true),
-            _ => {}
+            x => { self.mad_action(x); }
         }
     }
 
@@ -1051,6 +1122,8 @@ impl App {
 // Custom editor surface: input handling and rendering for both views.
 // ======================================================================
 
+/// text files above this size open in (memory-mapped) hex mode
+const HUGE_TEXT: u64 = 512 << 20;
 const K_LEFT: char = '\u{F702}';
 const K_RIGHT: char = '\u{F703}';
 const K_UP: char = '\u{F700}';
@@ -1302,6 +1375,8 @@ impl App {
     }
 
     fn ed_mouse(&self, vi: usize, kind: i32, x: f32, y: f32, ctrl: bool, shift: bool, alt: bool) {
+        if self.is_hex(vi) { self.hex_mouse(vi, kind, x, y, shift); return; }
+        let alt = alt ^ self.st.borrow().column_mode;
         if kind == 0 { self.ed_focused(vi); }
         let (cw, lh) = self.metrics();
         let (_, h) = self.view_size(vi);
@@ -1466,6 +1541,7 @@ impl App {
     fn ed_wheel(&self, vi: usize, dx: f32, dy: f32, shift: bool, ctrl: bool) {
         if ctrl { self.action_plain(if dy > 0.0 { "zoomin" } else { "zoomout" }); return; }
         let (cw, lh) = self.metrics();
+        if self.is_hex(vi) { let r = (-dy / lh).round() as i64; self.hex_scroll(vi, Some(if r == 0 { -dy.signum() as i64 } else { r }), None); return; }
         {
             let mut st = self.st.borrow_mut();
             let v = &mut st.views[vi];
@@ -1483,6 +1559,7 @@ impl App {
     }
 
     fn ed_vscroll(&self, vi: usize, f: f32) {
+        if self.is_hex(vi) { self.hex_scroll(vi, None, Some(f)); return; }
         {
             let mut st = self.st.borrow_mut();
             let v = &mut st.views[vi];
@@ -1532,6 +1609,7 @@ impl App {
 
     fn ed_input(&self, vi: usize, text: &str) {
         if text.is_empty() { return; }
+        if self.is_hex(vi) { self.hex_input(vi, text); self.refresh_status(); return; }
         self.record(format!("i:{text}"));
         self.ed_focused(vi);
         // typing replaces the autocomplete popup state
@@ -1580,9 +1658,12 @@ impl App {
 
     /// Returns true when the key was consumed by the editor.
     fn ed_key(&self, vi: usize, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        if self.is_hex(vi) { let h = self.hex_key(vi, text, ctrl, shift, alt); if h { self.refresh_status(); } return h; }
+        // column mode: Shift+arrows make a rectangular selection (like Alt+Shift)
+        let alt = alt || (shift && !ctrl && self.st.borrow().column_mode && text.chars().next().is_some_and(|c| [K_LEFT, K_RIGHT, K_UP, K_DOWN, K_HOME, K_END].contains(&c)));
         let handled = self.ed_key_inner(vi, text, ctrl, shift, alt);
         let lk = text.to_ascii_lowercase();
-        let via_action = (alt && !ctrl && (text == "0" || text == ")")) || (alt && ctrl && lk == "f") || (text == "\u{f70b}" && !ctrl && !alt);
+        let via_action = (alt && !ctrl && matches!(lk.as_str(), "0" | ")" | "h" | "c")) || (alt && ctrl && lk == "f") || (text == "\u{f70b}" && !ctrl && !alt);
         if handled && !via_action { self.record(format!("k:{}{}{}:{}", ctrl as u8, shift as u8, alt as u8, text)); self.refresh_status(); }
         handled
     }
@@ -1610,6 +1691,7 @@ impl App {
         if alt && !ctrl && matches!(k, '0' | ')') { run(if shift || k == ')' { "unfoldall" } else { "foldall" }); return true; }
         if alt && ctrl && lk == 'f' { run("foldcur"); return true; }
         if k == '\u{f70b}' && !ctrl && !alt { run("otherview"); return true; }
+        if alt && !ctrl && (lk == 'h' || lk == 'c') { run(if lk == 'c' { "columnmode" } else { "hexmode" }); return true; }
         if alt && !ctrl && !k.is_control() && (k as u32) < 0xf700 { return true; }
         if ctrl && !alt {
             match lk {
@@ -1983,6 +2065,7 @@ impl App {
 
     fn render(&self, vi: usize) {
         if vi == 1 && !self.st.borrow().split { return; }
+        if self.is_hex(vi) { self.hex_render(vi); return; }
         let ui = self.ui();
         let (cw, lh) = self.metrics();
         let (w, h) = self.view_size(vi);
@@ -1992,6 +2075,7 @@ impl App {
         let mut st = self.st.borrow_mut();
         let dark = st.dark;
         let line_numbers = st.line_numbers;
+        let spell_on = st.cfg.spell;
         let split = st.split;
         let docmap = st.docmap && !split && vi == 0;
         let active = st.view_idx() == vi;
@@ -2118,6 +2202,10 @@ impl App {
                     if before_ok && after_ok { rects.push(EdRect { x: px(co), w: px(co + nlen) - px(co), kind: 1 }); }
                 }
             }
+            if spell_on && matches!(d.lang.as_str(), "text" | "markdown") {
+                let seg = &chars[row.start.min(chars.len())..row.end.min(chars.len())];
+                for (a, b) in spell::misspelled(seg) { rects.push(EdRect { x: px(row.start + a), w: px(row.start + b) - px(row.start + a), kind: 4 }); }
+            }
             for &b in &brackets { if b >= rs && b < re { let o = b - ls; rects.push(EdRect { x: px(o), w: px(o + 1) - px(o), kind: 2 }); } }
             for &(s, e) in &sel_ranges {
                 if e < rs || s > re || (s == re && !(last_seg && e > re)) { continue; }
@@ -2210,6 +2298,7 @@ impl App {
     /// Status bar for the active view.
     fn refresh_status(&self) {
         let ui = self.ui();
+        if let Some(s) = self.hex_status() { ui.set_st_pos(s.into()); return; }
         let st = self.st.borrow();
         let v = &st.views[st.view_idx()];
         let r = &st.docs[v.doc].buf.rope;
@@ -2234,6 +2323,7 @@ impl App {
             let k = self.rkey.borrow()[vi];
             if self.dirty.get() || k != (cw, lh, w, h) { self.dirty.set(false); self.render(vi); }
         }
+        self.fif_poll();
     }
 
     fn play_macro(&self, times: usize) {
@@ -2408,7 +2498,9 @@ fn main() -> Result<(), slint::PlatformError> {
     let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: cfg.font.clamp(6.0, 48.0), wrap: cfg.wrap, line_numbers: cfg.line_numbers,
         preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
         hits: vec![], font_family: if cfg.font_family.trim().is_empty() { "JetBrains Mono".into() } else { cfg.font_family.clone() },
-        font_choices: detect_fonts(), ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete, cfg };
+        font_choices: detect_fonts(), ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete,
+        column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), cfg };
+    spell::set_ignored(&st.cfg.spell_ignore);
     let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
@@ -2438,6 +2530,10 @@ fn main() -> Result<(), slint::PlatformError> {
     cb!(on_replace_one, |a| { a.replace(false) });
     cb!(on_replace_all, |a| { a.replace(true) });
     cb!(on_find_all, |a| { a.find_all() });
+    cb!(on_fif_browse, |a| { a.fif_browse() });
+    cb!(on_fif_run, |a| { a.fif_run() });
+    cb!(on_fif_stop, |a| { a.fif_stop() });
+    cb!(on_prompt_ok, |a, t: SharedString| { a.prompt_ok(&t) });
     cb!(on_hit_clicked, |a, i: i32| { a.hit_clicked(i.max(0) as usize) });
     cb!(on_context_request, |a, k: SharedString, i: i32| { a.context_menu(&k, i) });
     cb!(on_rename_accepted, |a, t: SharedString| { a.rename(t.to_string()) });
