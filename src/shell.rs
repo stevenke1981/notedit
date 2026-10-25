@@ -8,18 +8,23 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const MENU_TEXT: &str = "用 NotEdit 開啟";
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const FOLDER_TEXT: &str = "用 NotEdit 開啟資料夾";
 
 /// One registry value to write: (key below HKCU, value name ("" = default), data).
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegValue { pub key: String, pub name: String, pub data: String }
 
 /// The three context-menu verbs: files (`*`), folders, and folder background.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn registry_roots() -> [&'static str; 3] {
     [r"Software\Classes\*\shell\NotEdit", r"Software\Classes\Directory\shell\NotEdit", r"Software\Classes\Directory\Background\shell\NotEdit"]
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn registry_entries(exe: &Path) -> Vec<RegValue> {
     let exe = exe.display().to_string();
     let q = |a: &str| format!("\"{exe}\" {a}");
@@ -63,16 +68,17 @@ pub fn uninstall_shell() -> Result<String, String> {
 }
 
 /// Contents of the Linux `.desktop` launcher.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub fn desktop_entry(exe: &Path) -> String {
     let exe = exe.display().to_string();
     let exe = if exe.contains(' ') { format!("\"{exe}\"") } else { exe };
     format!("[Desktop Entry]\nType=Application\nName=NotEdit\nGenericName=Text Editor\nGenericName[zh_TW]=文字編輯器\n\
-Comment=Notepad++-like text editor\nExec={exe} %F\nIcon=accessories-text-editor\nTerminal=false\nCategories=Utility;TextEditor;Development;\n\
+Comment=Notepad++-like text editor\nExec={exe} %F\nIcon=accessories-text-editor\nTerminal=false\nCategories=Utility;TextEditor;\n\
 MimeType=text/plain;text/markdown;text/html;text/x-csrc;text/x-chdr;text/x-c++src;text/x-python;text/x-rust;text/x-shellscript;text/xml;text/css;text/csv;application/json;application/xml;application/x-yaml;application/toml;inode/directory;\n\
 StartupNotify=true\nActions=new-window;\n\n[Desktop Action new-window]\nName=開啟 NotEdit\nExec={exe}\n")
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn desktop_path() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()).map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))

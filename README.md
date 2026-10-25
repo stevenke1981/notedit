@@ -14,6 +14,18 @@
 
 ## 功能
 
+### v0.7.0：檔案管理員右鍵選單
+
+- **Windows 檔案總管右鍵「用 NotEdit 開啟」**：設定 → 安裝檔案總管右鍵選單（或執行 `notedit.exe --install-shell`）。寫入目前使用者的登錄檔 `HKCU\Software\Classes`，**不需系統管理員權限**：
+  - `*\shell\NotEdit`：任何檔案，可多選
+  - `Directory\shell\NotEdit`、`Directory\Background\shell\NotEdit`：資料夾（或資料夾空白處）以「資料夾工作區」開啟
+  - 移除：設定 → 移除檔案總管右鍵選單，或 `notedit.exe --uninstall-shell`
+  - 移動 notedit.exe 後請重新安裝一次
+- **Linux**：設定 → 安裝檔案管理員「用 NotEdit 開啟」（或 `notedit --install-shell`）會建立 `~/.local/share/applications/notedit.desktop`（MimeType 含 text/*、JSON、XML、YAML、資料夾），檔案管理員的「用其他應用程式開啟」即可選 NotEdit；`--uninstall-shell` 移除
+- **macOS**：尚不支援 Finder 右鍵選單（需要 .app 套件與 Finder 擴充功能），請用「打開檔案的應用程式」或把檔案拖進視窗
+- **單一執行個體**：NotEdit 已在執行時，再次開啟的檔案（包含檔案總管多選後一次開啟多個）會送到既有視窗開成新分頁並把視窗帶到前景；資料夾參數會開成工作區。使用 `--new-instance` 可強制開新視窗。轉送只走本機 127.0.0.1，並以隨機權杖驗證
+- 命令列可一次傳入多個檔案與資料夾：`notedit a.txt b.rs 專案資料夾`
+
 ### v0.6.0
 
 - **資料夾工作區**（檔案 → 開啟資料夾作為工作區，檢視 → 資料夾工作區）：左側檔案樹，資料夾優先排序、略過 .git / target / node_modules；按一下展開資料夾、按兩下開啟檔案；工作區與展開狀態會記在設定中

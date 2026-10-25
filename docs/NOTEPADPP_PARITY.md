@@ -83,6 +83,7 @@ Sources: [MadEdit on SourceForge](https://sourceforge.net/projects/madedit/) ("T
 | P2 | Tab management parity | Partial | pin tabs, sort tabs, close unchanged/left/right, MRU switcher |
 | P2 | Compare | Implemented (v0.6.0: side-by-side diff, F7/Shift+F7; no line alignment or synced scroll) |
 | P3 | Custom theme / shortcuts | Implemented (v0.6.0: settings.json, hot-reload on save; no GUI dialog) |
+| P3 | Shell integration / single instance | Implemented (v0.7.0: Explorer context menu via HKCU, Linux .desktop, forwarding to running instance; macOS missing) |
 | P3 | User Defined Languages | Missing | User-editable syntax definitions independent of built-in syntect definitions |
 | P3 | Plugin API | Missing | Versioned, permission-aware extension boundary with failure isolation |
 | P3 | External commands | Partial | Configurable commands, variables for file/path/selection, captured output |
