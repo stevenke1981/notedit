@@ -4,6 +4,7 @@ mod preview;
 mod dlg;
 mod workspace;
 mod panels;
+mod shell;
 mod highlight;
 mod search;
 mod fmt;
@@ -310,7 +311,9 @@ fn build_menus(st: &State) -> Vec<Menu> {
         menu("語言", lang_items),
         menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("打字機模式 (游標行置中)", "", "typewriter", st.cfg.typewriter), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
-            mi("編輯佈景主題色彩 / 快捷鍵 (settings.json)...", "", "editconfig"), mi("開啟設定檔所在資料夾", "", "openconfig"), sep()]
+            mi("編輯佈景主題色彩 / 快捷鍵 (settings.json)...", "", "editconfig"), mi("開啟設定檔所在資料夾", "", "openconfig"), sep(),
+            mi(if cfg!(windows) { "安裝檔案總管右鍵選單「用 NotEdit 開啟」" } else { "安裝檔案管理員「用 NotEdit 開啟」(.desktop)" }, "", "installshell"),
+            mi(if cfg!(windows) { "移除檔案總管右鍵選單" } else { "移除檔案管理員整合 (.desktop)" }, "", "uninstallshell"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
         menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
             mi("比較兩個檔案 (左：目前 / 右：分割檢視或選擇檔案)", "", "compare"), en("下一個差異", "F7", "diffnext", st.docs[st.views[0].doc].diff.is_some()), en("上一個差異", "Shift+F7", "diffprev", st.docs[st.views[0].doc].diff.is_some()),
@@ -587,6 +590,11 @@ impl App {
         };
         ui.set_preview_title(d.title.clone().into());
         ui.set_preview_blocks(ModelRc::new(VecModel::from(blocks)));
+    }
+
+    /// Command-line / forwarded argument: folders become the workspace.
+    fn open_arg(&self, p: PathBuf) {
+        if p.is_dir() { self.set_workspace(p); self.persist(); } else { self.open_path(p); }
     }
 
     fn open_path(&self, path: PathBuf) {
@@ -1069,6 +1077,13 @@ impl App {
             "diffnext" => self.diff_nav(true, false),
             "diffprev" => self.diff_nav(false, false),
             "editconfig" => self.edit_user_config(),
+            "installshell" | "uninstallshell" => {
+                let r = if a == "installshell" {
+                    let exe = std::env::current_exe().map(|e| file_io::canon(&e).unwrap_or(e)).unwrap_or_default();
+                    shell::install_shell(&exe)
+                } else { shell::uninstall_shell() };
+                match r { Ok(m) => msg(&m), Err(e) => msg(&format!("失敗：{e}")) }
+            }
             "otherview" => { let split = self.st.borrow().split; if split { let o = 1 - self.av(); self.st.borrow_mut().active = o; self.refresh_meta(); self.render_all(); ui.invoke_focus_editor(); } }
             "docmap" => { { let mut st = self.st.borrow_mut(); st.docmap = !st.docmap; } self.refresh_meta(); self.persist(); }
             "typewriter" => { { let mut st = self.st.borrow_mut(); st.cfg.typewriter = !st.cfg.typewriter; for v in st.views.iter_mut() { v.follow = true; } } self.persist(); self.refresh_meta(); self.render_all(); }
@@ -2616,7 +2631,33 @@ fn msg(s: &str) {
     crate::dlg::msg().set_title("NotEdit").set_description(s).set_buttons(rfd::MessageButtons::Ok).show();
 }
 
+thread_local! { static APP: RefCell<Option<Rc<App>>> = const { RefCell::new(None) }; }
+
+fn shell_result(r: Result<String, String>) -> i32 {
+    let (ok, m) = match r { Ok(m) => (true, m), Err(e) => (false, format!("失敗：{e}")) };
+    println!("{m}");
+    // a GUI-subsystem exe has no console on Windows, so also show a dialog there
+    if cfg!(windows) { let _ = rfd::MessageDialog::new().set_title("NotEdit").set_description(m).show(); }
+    if ok { 0 } else { 1 }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
+    // ---- CLI-only actions and single-instance forwarding (before any window exists)
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--install-shell") {
+        let exe = std::env::current_exe().map(|e| file_io::canon(&e).unwrap_or(e)).unwrap_or_default();
+        std::process::exit(shell_result(shell::install_shell(&exe)));
+    }
+    if args.iter().any(|a| a == "--uninstall-shell") { std::process::exit(shell_result(shell::uninstall_shell())); }
+    let new_inst = args.iter().position(|a| a == "--new-instance" || a == "-multiInst").map(|i| args.remove(i)).is_some();
+    let smoking = args.iter().any(|a| a == "--smoke-test");
+    let single = !new_inst && !smoking;
+    if single {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let abs: Vec<PathBuf> = args.iter().map(|a| { let p = PathBuf::from(a); if p.is_absolute() { p } else { cwd.join(p) } }).collect();
+        if shell::forward(&abs) { return Ok(()); }
+    }
+
     let ui = AppWindow::new()?;
     dlg::set_main(ui.as_weak());
     let cfg = settings::Settings::load();
@@ -2699,7 +2740,6 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     // open files passed on command line, otherwise restore last session
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
     // `--smoke-test <out-file>`: start the full UI, open the given files, write a
     // short report and quit (used by CI on Windows/macOS/Linux; no console needed).
     let smoke: Option<PathBuf> = args.iter().position(|a| a == "--smoke-test").map(|i| { args.remove(i); if i < args.len() { PathBuf::from(args.remove(i)) } else { PathBuf::from("notedit-smoke.txt") } });
@@ -2718,7 +2758,18 @@ fn main() -> Result<(), slint::PlatformError> {
         let n = app.st.borrow().docs.len();
         app.st.borrow_mut().cur = sel.min(n - 1);
     }
-    for arg in args { app.open_path(PathBuf::from(arg)); }
+    for arg in args { app.open_arg(PathBuf::from(arg)); }
+    APP.with(|a| *a.borrow_mut() = Some(app.clone()));
+    if single {
+        // files opened later from Explorer / the file manager arrive here
+        shell::listen(|paths| {
+            let _ = slint::invoke_from_event_loop(move || APP.with(|a| if let Some(app) = a.borrow().clone() {
+                for p in paths { app.open_arg(p); }
+                app.refresh_all();
+                app.ui().window().with_winit_window(|w| { w.set_minimized(false); w.focus_window(); });
+            }));
+        });
+    }
     if smoke.is_none() { app.restore_recovery(); } // a modal recovery prompt would block the smoke test
     app.apply_theme();
     app.refresh_all();
@@ -2773,5 +2824,8 @@ fn main() -> Result<(), slint::PlatformError> {
             let _ = slint::quit_event_loop();
         });
     }
-    ui.run()
+    let r = ui.run();
+    if single { shell::release(); }
+    APP.with(|a| a.borrow_mut().take());
+    r
 }
