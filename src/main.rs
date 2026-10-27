@@ -290,7 +290,8 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi("字首大寫", "", "xf:cap"), mi("大小寫互換", "", "xf:invert"), sep(),
             mi("移除行首空白", "", "xf:trimlead"), mi("移除行首及行尾空白", "", "xf:trimboth"), mi("合併行", "", "xf:join"),
             mi("刪除空行", "", "xf:delempty"), mi("刪除空行 (含只有空白的行)", "", "xf:delblank"),
-            mi("排序行 (遞減)", "", "xf:sortdesc"), mi("移除重複行", "", "xf:dedup"), sep(),
+            mi("排序行 (遞減)", "", "xf:sortdesc"), mi("自然排序行 (數字順序)", "", "xf:sortnatural"),
+            mi("反轉行順序", "", "xf:reverse"), mi("移除重複行", "", "xf:dedup"), sep(),
             mi("插入遞增數字...", "", "xf:number"), mi("欄位對齊...", "", "xf:align"), sep(),
             mi("複製為十六進位字串", "", "xf:tohex"), mi("還原十六進位字串", "", "xf:fromhex"), sep(),
             mi("JSON 格式化", "", "xf:jsonfmt"), mi("JSON 壓縮", "", "xf:jsonmin"), mi("XML 格式化", "", "xf:xmlfmt"), mi("XML 壓縮", "", "xf:xmlmin")]),
@@ -1144,7 +1145,7 @@ impl App {
                     else { let end = if le < t.len() { le + 1 } else { le }; let start = if end == le && ls > 0 { ls - 1 } else { ls }; format!("{}{}", &t[..start], &t[end..]) };
                 self.set_text(nt);
             }
-            "upper" | "lower" | "trimtrail" | "sortlines" => {
+            "upper" | "lower" | "trimtrail" => {
                 let t = self.text();
                 let (s, e) = self.selection();
                 let (s, e) = if e > s { (s, e) } else { (0, t.len()) };
@@ -1152,8 +1153,7 @@ impl App {
                 let r = match a {
                     "upper" => seg.to_uppercase(),
                     "lower" => seg.to_lowercase(),
-                    "trimtrail" => seg.split('\n').map(|l| l.trim_end()).collect::<Vec<_>>().join("\n"),
-                    _ => { let mut v: Vec<&str> = seg.split('\n').collect(); v.sort(); v.join("\n") }
+                    _ => seg.split('\n').map(|l| l.trim_end()).collect::<Vec<_>>().join("\n"),
                 };
                 self.set_text(format!("{}{}{}", &t[..s], r, &t[e..]));
                 if e > s && e < t.len() { self.select_bytes(s, s + r.len()); }
@@ -2566,6 +2566,21 @@ fn toggle_comment_lines(block: &str, pre: &str, post: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn line_transform_is_one_undoable_edit() {
+        let original = "file10\nfile2\n中文\n";
+        let mut buffer = crate::editor::Buffer::from_str(original);
+        let mut selections = vec![crate::editor::Sel::new(0, 6)];
+        let sorted = crate::textops::reorder_lines(original, crate::textops::LineOrder::Natural);
+        buffer.set_text(&selections, &sorted);
+        assert_eq!(buffer.text(), "file2\nfile10\n中文\n");
+        assert!(buffer.undo(&mut selections));
+        assert_eq!(buffer.text(), original);
+        assert_eq!(selections, vec![crate::editor::Sel::new(0, 6)]);
+        assert!(!buffer.can_undo());
+        assert!(buffer.redo(&mut selections));
+        assert_eq!(buffer.text(), sorted);
+    }
     use super::*;
     #[test]
     fn comments() {

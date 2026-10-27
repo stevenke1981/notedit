@@ -75,8 +75,11 @@ impl App {
             "xf:delblank" => self.transform(|s| textops::delete_empty_lines(s, true)),
             "xf:cap" => self.transform(textops::capitalize),
             "xf:invert" => self.transform(textops::invert_case),
-            "xf:sortdesc" => self.transform(|s| { let mut v: Vec<&str> = s.split('\n').collect(); v.sort(); v.reverse(); v.join("\n") }),
-            "xf:dedup" => self.transform(|s| { let mut seen = std::collections::HashSet::new(); s.split('\n').filter(|l| seen.insert(*l)).collect::<Vec<_>>().join("\n") }),
+            "sortlines" => self.transform(|s| textops::reorder_lines(s, textops::LineOrder::Ascending)),
+            "xf:sortdesc" => self.transform(|s| textops::reorder_lines(s, textops::LineOrder::Descending)),
+            "xf:sortnatural" => self.transform(|s| textops::reorder_lines(s, textops::LineOrder::Natural)),
+            "xf:reverse" => self.transform(|s| textops::reorder_lines(s, textops::LineOrder::Reverse)),
+            "xf:dedup" => self.transform(textops::unique_lines),
             "xf:tohex" => {
                 let (s, e) = self.selection();
                 if e == s { msg("請先選取文字。"); return true; }
@@ -105,7 +108,7 @@ impl App {
                 let c = textops::count(if e > s { &t[s..e] } else { &t });
                 let fmt = |n: usize| n.to_string();
                 msg(&format!("{}字數 (中日韓每字計一)：{}\n字元數 (不含空白)：{}\n空白字元：{}\n中日韓文字：{}\n半形字元：{}\n全形字元：{}\n行數：{}\n位元組 (UTF-8)：{}",
-                    if e > s { "【選取範圍】\n" } else { "" }, fmt(c.words), fmt(c.chars), fmt(c.spaces), fmt(c.cjk), fmt(c.halfwidth), fmt(c.fullwidth), fmt(c.lines), fmt(c.bytes_utf8)));
+                    if e > s { "【選取範圍】\n" } else { "" }, fmt(c.words), fmt(c.chars - c.spaces), fmt(c.spaces), fmt(c.cjk), fmt(c.halfwidth), fmt(c.fullwidth), fmt(c.lines), fmt(c.bytes_utf8)));
             }
             "hexmode" => self.set_hex_mode(true),
             "textmode" => { self.st.borrow_mut().column_mode = false; self.set_hex_mode(false) }

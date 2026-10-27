@@ -103,6 +103,63 @@ pub fn invert_case(s: &str) -> String {
     s.chars().flat_map(|c| -> Vec<char> { if c.is_uppercase() { c.to_lowercase().collect() } else if c.is_lowercase() { c.to_uppercase().collect() } else { vec![c] } }).collect()
 }
 
+#[derive(Clone, Copy)]
+pub enum LineOrder { Ascending, Descending, Natural, Reverse }
+
+/// Operate on LF-normalized editor text without sorting the final terminator
+/// as an extra empty line. Interior blank lines remain real data.
+fn map_lines(s: &str, f: impl FnOnce(&mut Vec<&str>)) -> String {
+    if s.is_empty() { return String::new(); }
+    let terminated = s.ends_with('\n');
+    let body = s.strip_suffix('\n').unwrap_or(s);
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    f(&mut lines);
+    let mut result = lines.join("\n");
+    if terminated { result.push('\n'); }
+    result
+}
+
+pub fn reorder_lines(s: &str, order: LineOrder) -> String {
+    map_lines(s, |lines| match order {
+        LineOrder::Ascending => lines.sort(),
+        LineOrder::Descending => lines.sort_by(|a, b| b.cmp(a)),
+        LineOrder::Natural => lines.sort_by(|a, b| natural_cmp(a, b)),
+        LineOrder::Reverse => lines.reverse(),
+    })
+}
+
+pub fn unique_lines(s: &str) -> String {
+    map_lines(s, |lines| {
+        let mut seen = std::collections::HashSet::new();
+        lines.retain(|line| seen.insert(*line));
+    })
+}
+
+/// Compare ASCII digit runs by magnitude without parsing (no integer overflow).
+/// Equal numbers retain their input order, including differently padded forms.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+    while !a.is_empty() && !b.is_empty() {
+        let ordering = if a[0].is_ascii_digit() && b[0].is_ascii_digit() {
+            let an = a.iter().take_while(|c| c.is_ascii_digit()).count();
+            let bn = b.iter().take_while(|c| c.is_ascii_digit()).count();
+            let ax = &a[..an];
+            let bx = &b[..bn];
+            let ax = &ax[ax.iter().take_while(|&&c| c == b'0').count()..];
+            let bx = &bx[bx.iter().take_while(|&&c| c == b'0').count()..];
+            let ordering = ax.len().cmp(&bx.len()).then_with(|| ax.cmp(bx));
+            a = &a[an..]; b = &b[bn..];
+            ordering
+        } else {
+            let ordering = a[0].cmp(&b[0]);
+            a = &a[1..]; b = &b[1..];
+            ordering
+        };
+        if ordering != std::cmp::Ordering::Equal { return ordering; }
+    }
+    a.len().cmp(&b.len())
+}
+
 /// `Mod` → `4D6F64` (or `4D 6F 64` with spaces).
 pub fn to_hex_string(bytes: &[u8], spaced: bool) -> String {
     let v: Vec<String> = bytes.iter().map(|b| format!("{b:02X}")).collect();
@@ -149,6 +206,32 @@ pub fn count(s: &str) -> Counts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reorder_preserves_final_newline_and_blank_lines() {
+        assert_eq!(reorder_lines("b\na\n", LineOrder::Ascending), "a\nb\n");
+        assert_eq!(reorder_lines("b\n\na\n", LineOrder::Descending), "b\na\n\n");
+        assert_eq!(reorder_lines("b\na", LineOrder::Reverse), "a\nb");
+        assert_eq!(reorder_lines("中\n文\n", LineOrder::Reverse), "文\n中\n");
+        assert_eq!(reorder_lines("", LineOrder::Natural), "");
+        assert_eq!(reorder_lines("\n", LineOrder::Reverse), "\n");
+    }
+
+    #[test]
+    fn natural_order_handles_large_numbers_and_leading_zeroes() {
+        assert_eq!(reorder_lines("file10\nfile02\nfile2\nfile1\n", LineOrder::Natural),
+            "file1\nfile02\nfile2\nfile10\n");
+        assert_eq!(reorder_lines("x100000000000000000000\nx9\nx20", LineOrder::Natural),
+            "x9\nx20\nx100000000000000000000");
+        assert_eq!(reorder_lines("中10節2\n中2節10\n中2節3", LineOrder::Natural),
+            "中2節3\n中2節10\n中10節2");
+    }
+
+    #[test]
+    fn dedup_keeps_order_and_final_newline() {
+        assert_eq!(unique_lines("中\na\n中\na\n"), "中\na\n");
+        assert_eq!(unique_lines("a\n\n\na"), "a\n");
+        assert_eq!(unique_lines("\n\n"), "\n");
+    }
     #[test]
     fn chinese() {
         assert_eq!(s2t("简体中文软件"), "簡體中文軟體");
