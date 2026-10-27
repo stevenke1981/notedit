@@ -56,7 +56,7 @@ Sources: [MadEdit on SourceForge](https://sourceforge.net/projects/madedit/) ("T
 | Insert incremental numbers, column align | Implemented | |
 | Join lines, delete empty lines, trim leading/trailing | Implemented | |
 | Capitalize, invert case | Implemented | |
-| Bookmarks | Implemented; copy/cut/delete bookmarked lines missing | |
+| Bookmarks | Implemented; invert and copy/cut/delete bookmarked lines available | Batch text edits undo in one step; removed bookmarks are not restored by text undo |
 | Highlight word | Implemented (mark-all on selection) | |
 | Markdown / HTML preview | Implemented (since v0.1) | |
 | Typewriter mode, auto backup, Python macros, JSON/XML/Astyle formatters, Pan-Chinese search | Missing | |

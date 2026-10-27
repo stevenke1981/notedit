@@ -19,6 +19,7 @@ mod madops;
 mod file_io;
 mod recovery;
 mod file_watch;
+mod bookmarks;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
@@ -297,7 +298,9 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi("JSON 格式化", "", "xf:jsonfmt"), mi("JSON 壓縮", "", "xf:jsonmin"), mi("XML 格式化", "", "xf:xmlfmt"), mi("XML 壓縮", "", "xf:xmlmin")]),
         menu("搜尋", vec![mi("尋找...", "Ctrl+F", "find"), mi("找下一個", "F3", "findnext"), mi("找上一個", "Shift+F3", "findprev"),
             mi("取代...", "Ctrl+H", "replace"), mi("在所有開啟文件中尋找", "", "findall"), mi("在檔案中尋找...", "Ctrl+Shift+F", "fif"), mi("在檔案中取代...", "", "fifreplace"), mi("復原檔案取代", "", "fifundo"), sep(), mi("跳至...", "Ctrl+G", "goto"), mi("跳至對應括號", "Ctrl+B", "gotobrace"), sep(),
-            mi("切換書籤", "Ctrl+F2", "bookmark"), mi("下一個書籤", "F2", "nextbm"), mi("上一個書籤", "Shift+F2", "prevbm"), mi("清除所有書籤", "", "clearbm")]),
+            mi("切換書籤", "Ctrl+F2", "bookmark"), mi("下一個書籤", "F2", "nextbm"), mi("上一個書籤", "Shift+F2", "prevbm"), mi("清除所有書籤", "", "clearbm"),
+            sep(), mi("反轉書籤", "", "bmlines:invert"), mi("複製書籤行", "", "bmlines:copy"),
+            mi("剪下書籤行", "", "bmlines:cut"), mi("刪除書籤行", "", "bmlines:delete")]),
         menu("檢視", vec![chk("文字模式", "", "textmode", d.hex.is_none() && !st.column_mode), chk("欄模式", "Alt+C", "columnmode", d.hex.is_none() && st.column_mode),
             chk("十六進位模式", "Alt+H", "hexmode", d.hex.is_some()), chk("拼字檢查 (英文，純文字/Markdown)", "", "spell", st.cfg.spell), sep(),chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers),
             chk("HTML / Markdown 預覽", "", "preview", st.preview), chk("文件地圖", "", "docmap", st.docmap), chk("資料夾工作區", "", "side:1", st.side_mode == 1), chk("函式清單", "", "side:2", st.side_mode == 2), sep(),
@@ -1048,7 +1051,7 @@ impl App {
         if self.is_hex(self.av()) {
             let k = match a { "undo" => "z", "redo" => "y", "copy" => "c", "cut" => "c", "paste" => "v", "selectall" => "a", _ => "" };
             if !k.is_empty() { self.hex_key(self.av(), k, true, false, false); self.refresh_status(); return; }
-            if matches!(a, "upper" | "lower" | "trimtrail" | "sortlines" | "dupline" | "delline" | "comment" | "find" | "replace" | "findnext" | "findprev" | "goto" | "datetime") || a.starts_with("xf:") {
+            if matches!(a, "upper" | "lower" | "trimtrail" | "sortlines" | "dupline" | "delline" | "comment" | "find" | "replace" | "findnext" | "findprev" | "goto" | "datetime") || a.starts_with("xf:") || a.starts_with("bmlines:") {
                 msg("十六進位模式下不支援此功能，請先切換回文字模式 (Alt+H)。"); return;
             }
         }
@@ -1132,6 +1135,7 @@ impl App {
             }
             "clearrecent" => { self.st.borrow_mut().cfg.recent.clear(); self.refresh_meta(); }
             "cut" => self.copy(self.av(), true),
+            x if x.starts_with("bmlines:") => self.bookmark_lines(&x[8..]),
             "copy" => self.copy(self.av(), false),
             "paste" => self.paste(self.av()),
             "selectall" => self.select_all(self.av()),
@@ -1883,10 +1887,41 @@ impl App {
         if ok { self.after_edit(); }
     }
 
-    fn clipboard_set(&self, t: String) {
+    fn clipboard_set(&self, t: String) -> bool {
         let mut cb = self.clip.borrow_mut();
         if cb.is_none() { *cb = arboard::Clipboard::new().ok(); }
-        if let Some(c) = cb.as_mut() { let _ = c.set_text(t); }
+        cb.as_mut().is_some_and(|c| c.set_text(t).is_ok())
+    }
+
+    fn bookmark_lines(&self, action: &str) {
+        let vi = self.av();
+        if action == "invert" {
+            {
+                let mut st = self.st.borrow_mut();
+                let di = st.views[vi].doc;
+                let d = &mut st.docs[di];
+                d.bookmarks = bookmarks::invert(&d.buf.rope, &d.bookmarks);
+            }
+            self.render_all();
+            return;
+        }
+        let (text, edits) = {
+            let st = self.st.borrow();
+            let d = &st.docs[st.views[vi].doc];
+            if d.bookmarks.is_empty() { return; }
+            (if action == "delete" { String::new() } else { bookmarks::collect(&d.buf.rope, &d.bookmarks) },
+             if matches!(action, "cut" | "delete") { bookmarks::deletions(&d.buf.rope, &d.bookmarks) } else { vec![] })
+        };
+        if action != "delete" && !self.clipboard_set(text) {
+            msg("無法寫入剪貼簿，書籤行尚未變更。請稍後再試。");
+            return;
+        }
+        if matches!(action, "cut" | "delete") && !edits.is_empty() {
+            // All marked lines are removed; clear before the shared edit path
+            // adjusts remaining line metadata and renders both split views.
+            { let mut st = self.st.borrow_mut(); let di = st.views[vi].doc; st.docs[di].bookmarks.clear(); }
+            self.apply_edits(vi, edits, EditKind::Other, false);
+        }
     }
 
     fn clipboard_get(&self) -> Option<String> {
