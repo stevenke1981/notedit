@@ -20,6 +20,7 @@ mod file_io;
 mod recovery;
 mod file_watch;
 mod bookmarks;
+mod render_model;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
@@ -2444,14 +2445,16 @@ impl App {
         }
 
         let title = if split { format!("{}{}", if d.modified { "● " } else { "" }, d.title) } else { String::new() };
-        let state = EdState {
-            rows: ModelRc::new(VecModel::from(rows)), carets: ModelRc::new(VecModel::from(carets)),
-            gutter_w, num_w, thumb_pos, thumb_size, hthumb_pos, hthumb_size, hbar,
-            ac_items: ModelRc::new(VecModel::from(ac_items)), ac_sel, ac_visible,
-            title: title.into(),
-            map_lines: ModelRc::new(VecModel::from(if docmap { v.map.clone() } else { vec![] })), map_view_y: map_y, map_view_h: map_h,
-        };
+        let map_lines = if docmap { v.map.clone() } else { vec![] };
         drop(st);
+        let previous = if vi == 0 { ui.get_v0() } else { ui.get_v1() };
+        let state = EdState {
+            rows: render_model::update_rows(previous.rows, rows), carets: render_model::update(previous.carets, carets),
+            gutter_w, num_w, thumb_pos, thumb_size, hthumb_pos, hthumb_size, hbar,
+            ac_items: render_model::update(previous.ac_items, ac_items), ac_sel, ac_visible,
+            title: title.into(),
+            map_lines: render_model::update(previous.map_lines, map_lines), map_view_y: map_y, map_view_h: map_h,
+        };
         if vi == 0 { ui.set_v0(state); } else { ui.set_v1(state); }
         self.rkey.borrow_mut()[vi] = (cw, lh, w, h);
     }
@@ -2863,10 +2866,34 @@ fn main() -> Result<(), slint::PlatformError> {
         _smoke_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(1500), move || {
             let ui = a.ui();
             a.action("side:2");
+            // Exercise the real input callbacks; timings cover handlers, not GPU frames.
+            let mut interaction = String::new();
+            if !a.is_hex(0) {
+                let before = ui.get_v0().rows;
+                let tokens: Vec<_> = before.iter().map(|r| r.toks).collect();
+                let version = { let st = a.st.borrow(); st.docs[st.views[0].doc].buf.version };
+                let (_, lh) = a.metrics();
+                let mut timings = Vec::new();
+                for i in 0..40 {
+                    let y = (i % before.row_count().max(1).min(10)) as f32 * lh + lh / 2.0;
+                    let start = Instant::now();
+                    ui.invoke_ed_mouse(0, 0, 24.0, y, false, false, false);
+                    ui.invoke_ed_mouse(0, 1, 64.0, y, false, false, false);
+                    ui.invoke_ed_mouse(0, 2, 64.0, y, false, false, false);
+                    timings.push(start.elapsed().as_micros());
+                }
+                timings.sort_unstable();
+                let after = ui.get_v0().rows;
+                let reused = tokens.iter().zip(after.iter()).filter(|(old, row)| **old == row.toks).count();
+                assert_eq!(before, after, "clicks must retain the row model");
+                assert_eq!(reused, tokens.len(), "clicks must retain text models");
+                { let st = a.st.borrow(); assert_eq!(version, st.docs[st.views[0].doc].buf.version); }
+                interaction = format!("INPUT_CALLBACKS_OK gestures=40 text_models_reused={reused} handler_median_us={} handler_p95_us={}\n", timings[20], timings[37]);
+            }
             let report = {
                 let st = a.st.borrow();
                 let sz = ui.window().size();
-                format!("NOTEDIT_SMOKE_OK version={} docs={} first={} lines={} symbols={} window={}x{} scale={}\n",
+                format!("NOTEDIT_SMOKE_OK version={} docs={} first={} lines={} symbols={} window={}x{} scale={}\n{interaction}",
                     env!("CARGO_PKG_VERSION"), st.docs.len(), st.docs[0].title, st.docs[0].buf.rope.len_lines(), st.side_syms.len(),
                     sz.width, sz.height, ui.window().scale_factor())
             };
