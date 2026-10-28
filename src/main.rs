@@ -360,6 +360,7 @@ struct App {
     dirty: std::cell::Cell<bool>,
     rkey: RefCell<[(f32, f32, f32, f32); 2]>,
     ticker: slint::Timer,
+    preview_timer: slint::Timer,
     /// fires after 10 s without rendering; switches to a static caret
     idle: slint::Timer,
 }
@@ -586,6 +587,7 @@ impl App {
     }
 
     fn refresh_preview(&self) {
+        self.preview_timer.stop();
         let ui = self.ui();
         let st = self.st.borrow();
         if !st.preview { return; }
@@ -1336,7 +1338,12 @@ impl App {
 
     fn after_edit(&self) {
         self.refresh_meta();
-        if self.st.borrow().preview { self.refresh_preview(); }
+        if self.st.borrow().preview {
+            let me = self.me.borrow().clone();
+            self.preview_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(180), move || {
+                if let Some(app) = me.upgrade() { app.refresh_preview(); }
+            });
+        }
         self.render_all();
     }
 
@@ -2752,7 +2759,7 @@ fn main() -> Result<(), slint::PlatformError> {
         side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
         side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), idle: Default::default(),
+    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), preview_timer: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
@@ -3046,6 +3053,29 @@ fn main() -> Result<(), slint::PlatformError> {
                     env!("CARGO_PKG_VERSION"), st.docs.len(), st.docs[0].title, st.docs[0].buf.rope.len_lines(), st.side_syms.len(),
                     sz.width, sz.height, ui.window().scale_factor())
             };
+            if std::env::var_os("NOTEDIT_PREVIEW_SMOKE").is_some() && ui.get_show_preview() {
+                a.select_bytes(0, 0);
+                let before = ui.get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
+                let baseline = std::env::var_os("NOTEDIT_PREVIEW_BASELINE").is_some();
+                let start = Instant::now();
+                for _ in 0..10 {
+                    ui.invoke_ed_input(0, "x".into());
+                    if baseline { a.refresh_preview(); }
+                }
+                let input_us = start.elapsed().as_micros();
+                let during = ui.get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
+                let a = a.clone();
+                let out = out.clone();
+                slint::Timer::single_shot(Duration::from_millis(400), move || {
+                    let after = a.ui().get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
+                    let result = if baseline && during != before && after == during && after.contains("xxxxxxxxxx") { "PREVIEW_BASELINE_OK" }
+                        else if !baseline && during == before && after != before && after.contains("xxxxxxxxxx") { "PREVIEW_DEBOUNCE_OK" }
+                        else { "PREVIEW_SMOKE_FAILED" };
+                    let _ = std::fs::write(&out, format!("{report}{result} edits=10 input_us={input_us}\n"));
+                    let _ = slint::quit_event_loop();
+                });
+                return;
+            }
             let _ = std::fs::write(&out, report);
             let _ = slint::quit_event_loop();
         });
