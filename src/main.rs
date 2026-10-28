@@ -22,6 +22,8 @@ mod file_watch;
 mod bookmarks;
 mod render_model;
 mod agent;
+mod credentials;
+mod ai_files;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
@@ -316,6 +318,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
             chk("Shift-JIS (日文)", "", "enc:sjis", d.encoding == encoding_rs::SHIFT_JIS), chk("Windows-1252 (西歐)", "", "enc:1252", d.encoding == encoding_rs::WINDOWS_1252)]),
         menu("語言", lang_items),
         menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
+            mi("OpenRouter API 金鑰...", "", "ai-settings"),
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("打字機模式 (游標行置中)", "", "typewriter", st.cfg.typewriter), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
             mi("編輯佈景主題色彩 / 快捷鍵 (settings.json)...", "", "editconfig"), mi("開啟設定檔所在資料夾", "", "openconfig"), sep(),
             mi(if cfg!(windows) { "安裝檔案總管右鍵選單「用 NotEdit 開啟」" } else { "安裝檔案管理員「用 NotEdit 開啟」(.desktop)" }, "", "installshell"),
@@ -353,6 +356,7 @@ struct App {
     st: RefCell<State>,
     me: RefCell<std::rc::Weak<App>>,
     clip: RefCell<Option<arboard::Clipboard>>,
+    ai_key: RefCell<String>,
     dirty: std::cell::Cell<bool>,
     rkey: RefCell<[(f32, f32, f32, f32); 2]>,
     ticker: slint::Timer,
@@ -1059,6 +1063,7 @@ impl App {
         }
         match a {
             "ai" => { ui.set_ai_visible(!ui.get_ai_visible()); }
+            "ai-settings" => { ui.set_ai_visible(true); ui.set_ai_page(2); }
             "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
                 if let Some(files) = crate::dlg::file().set_title("開啟舊檔")
@@ -2747,11 +2752,15 @@ fn main() -> Result<(), slint::PlatformError> {
         side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
         side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(), idle: Default::default(),
+    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
-    if let Ok(key) = std::env::var("OPENROUTER_API_KEY") { ui.set_ai_key(key.into()); }
+    match credentials::load() {
+        Ok(Some(key)) => { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key.into()); ui.set_ai_key_status("已載入 NotEdit 儲存的金鑰".into()); }
+        Ok(None) => if let Ok(key) = std::env::var("OPENROUTER_API_KEY") { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key.into()); ui.set_ai_key_status("使用環境變數金鑰；可另行儲存到 NotEdit".into()); },
+        Err(e) => ui.set_ai_key_status(format!("無法讀取已儲存的金鑰：{e}").into()),
+    }
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
     // Close open menus first and run the action after the next frame, so a modal
@@ -2764,10 +2773,27 @@ fn main() -> Result<(), slint::PlatformError> {
             slint::Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = w.upgrade() { a.action(&s) } });
         } else { a.action(&s) }
     });
+    cb!(on_ai_save_key, |a| {
+        let ui = a.ui();
+        let key = ui.get_ai_key();
+        if key.trim().is_empty() { ui.set_ai_key_status("請先輸入金鑰".into()); return; }
+        match credentials::save(key.trim()) { Ok(()) => { *a.ai_key.borrow_mut() = key.trim().to_string(); ui.set_ai_key_status("已加密儲存金鑰".into()); }, Err(e) => ui.set_ai_key_status(format!("儲存金鑰失敗：{e}").into()) }
+    });
+    cb!(on_ai_use_key, |a| {
+        let ui = a.ui();
+        let key = ui.get_ai_key();
+        if key.trim().is_empty() { ui.set_ai_key_status("請先輸入金鑰".into()); return; }
+        *a.ai_key.borrow_mut() = key.trim().to_string();
+        ui.set_ai_key_status("金鑰僅用於本次執行，未變更已儲存金鑰".into());
+    });
+    cb!(on_ai_clear_key, |a| {
+        let ui = a.ui();
+        match credentials::clear() { Ok(()) => { a.ai_key.borrow_mut().clear(); ui.set_ai_key("".into()); ui.set_ai_key_status("已刪除儲存的金鑰".into()); }, Err(e) => ui.set_ai_key_status(format!("刪除金鑰失敗：{e}").into()) }
+    });
     cb!(on_ai_send, |a| {
         let ui = a.ui();
         if ui.get_ai_running() { return; }
-        let key = ui.get_ai_key().to_string();
+        let key = a.ai_key.borrow().clone();
         let model = ui.get_ai_model().trim().to_string();
         let prompt = ui.get_ai_prompt().to_string();
         let (role, role_name) = match ui.get_ai_role() {
@@ -2776,7 +2802,23 @@ fn main() -> Result<(), slint::PlatformError> {
             5 => (agent::Role::Format, "格式整理"), _ => (agent::Role::General, "通用助手"),
         };
         let history = ui.get_ai_history().to_string();
-        let document = ui.get_ai_include_document().then(|| a.text());
+        let mode = ui.get_ai_mode();
+        let create_path = if mode == 1 {
+            let Some(path) = crate::dlg::file().set_title("AI 自動建立新檔（不覆蓋既有檔案）").add_filter("文件", &["md", "json", "txt"]).save_file() else { return; };
+            if path.exists() { ui.set_ai_status("檔案已存在，請選擇新檔名".into()); return; }
+            Some(path)
+        } else { None };
+        let document = (ui.get_ai_include_document() || mode == 2).then(|| a.text());
+        let target = if mode == 2 {
+            let st = a.st.borrow();
+            let d = &st.docs[st.views[st.view_idx()].doc];
+            let Some(path) = d.path.clone() else { ui.set_ai_status("自動修改前請先儲存目前文件".into()); return; };
+            if d.hex.is_some() { ui.set_ai_status("自動修改僅支援文字文件".into()); return; }
+            if file_watch::stamp(&path).ok() != d.disk_stamp { ui.set_ai_status("磁碟檔案已變更，請先重新載入後再執行".into()); return; }
+            let disk = match std::fs::read(&path) { Ok(bytes) => bytes, Err(e) => { ui.set_ai_status(format!("無法讀取原檔：{e}").into()); return; } };
+            let buffer = match encode(d) { Ok(bytes) => bytes, Err(e) => { ui.set_ai_status(e.into()); return; } };
+            Some((path, disk, buffer))
+        } else { None };
         let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
         ui.set_ai_running(true);
         ui.set_ai_status("正在請求 OpenRouter...".into());
@@ -2791,9 +2833,41 @@ fn main() -> Result<(), slint::PlatformError> {
                         ui.set_ai_result(text.into());
                         ui.set_ai_page(1);
                         ui.set_ai_has_source(document.is_some());
-                        ui.set_ai_source(document.unwrap_or_default().into());
+                        ui.set_ai_source(document.as_deref().unwrap_or_default().into());
                         ui.set_ai_source_title(title.into());
                         ui.set_ai_status("完成：請檢查內容後套用".into());
+                        APP.with(|slot| if let Some(app) = slot.borrow().clone() {
+                            let result_text = ui.get_ai_result().to_string();
+                            if let Some(path) = create_path {
+                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) && serde_json::from_str::<serde_json::Value>(&result_text).is_err() {
+                                    ui.set_ai_status("模型輸出的 JSON 無效，未建立檔案；請檢查預覽".into()); return;
+                                }
+                                match ai_files::create(&path, result_text.as_bytes()) {
+                                    Ok(()) => { app.open_path(path.clone()); ui.set_ai_status(format!("已建立：{}", path.display()).into()); }
+                                    Err(e) => ui.set_ai_status(format!("建立檔案失敗：{e}").into()),
+                                }
+                            } else if let Some((path, disk, buffer)) = target {
+                                let current = { let st = app.st.borrow(); let d = &st.docs[st.views[st.view_idx()].doc]; d.path.as_ref() == Some(&path) && document.as_deref() == Some(d.text().as_str()) };
+                                if !current || std::fs::read(&path).ok().as_deref() != Some(disk.as_slice()) {
+                                    ui.set_ai_status("文件已變更或切換，未自動修改；請重新送出".into()); return;
+                                }
+                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) && serde_json::from_str::<serde_json::Value>(&result_text).is_err() {
+                                    ui.set_ai_status("模型輸出的 JSON 無效，未修改檔案；請檢查預覽".into()); return;
+                                }
+                                match ai_files::backup(&path, &disk, &buffer) {
+                                    Ok((disk_backup, buffer_backup)) => {
+                                        if std::fs::read(&path).ok().as_deref() != Some(disk.as_slice()) {
+                                            ui.set_ai_status(format!("備份期間原檔已變更，未修改；備份：{}", disk_backup.display()).into()); return;
+                                        }
+                                        app.set_text(result_text);
+                                        let idx = app.cd();
+                                        if app.save(idx, false) { ui.set_ai_status(format!("已修改並儲存；備份：{}、{}", disk_backup.display(), buffer_backup.display()).into()); }
+                                        else { ui.set_ai_status(format!("儲存失敗；原檔及備份保留於 {}", disk_backup.display()).into()); }
+                                    }
+                                    Err(e) => ui.set_ai_status(format!("備份失敗，未修改文件：{e}").into()),
+                                }
+                            }
+                        });
                     }
                     Err(e) => ui.set_ai_status(e.into()),
                 }

@@ -185,7 +185,9 @@ export component AppWindow inherits Window {
     in-out property <bool> ai-visible: false;
     in-out property <int> ai-page: 0;
     in-out property <int> ai-role: 0;
+    in-out property <int> ai-mode: 0;
     in-out property <string> ai-key;
+    in-out property <string> ai-key-status;
     in-out property <string> ai-model: "openrouter/free";
     in-out property <string> ai-prompt;
     in-out property <string> ai-result;
@@ -198,6 +200,9 @@ export component AppWindow inherits Window {
     in-out property <string> ai-history;
     callback ai-send();
     callback ai-apply(bool);
+    callback ai-save-key();
+    callback ai-use-key();
+    callback ai-clear-key();
 
     public function focus-editor() { if (split && active-view == 1) { ev1.focus-in(); } else { ev0.focus-in(); } }
 
@@ -433,7 +438,8 @@ export component AppWindow inherits Window {
                         Text { text: "指令"; color: c-fg; }
                         TextEdit { text <=> ai-prompt; height: 75px; wrap: word-wrap; placeholder-text: "例如：整理目前文章或建立 JSON"; }
                         CheckBox { text: "傳送目前文件內容"; checked <=> ai-include-document; }
-                        Text { text: "文件與先前對話會傳送至 OpenRouter。"; color: c-gutter-fg; wrap: word-wrap; }
+                        ComboBox { model: ["僅預覽", "自動建立新檔", "自動備份並修改目前檔案"]; current-index <=> ai-mode; enabled: !ai-running; }
+                        Text { text: "先前對話會傳送至 OpenRouter；自動修改會傳送目前文件。"; color: c-gutter-fg; wrap: word-wrap; }
                         HorizontalLayout { spacing: 6px;
                             Button { text: "送出"; enabled: !ai-running; clicked => { ai-send(); } }
                             Button { text: "清除對話"; enabled: !ai-running; clicked => { ai-history = ""; ai-result = ""; ai-status = "已清除對話"; ai-has-source = false; } }
@@ -450,8 +456,15 @@ export component AppWindow inherits Window {
                         Text { text: ai-status; color: c-fg; wrap: word-wrap; }
                     }
                     if ai-page == 2: VerticalLayout { padding: 8px; spacing: 8px; alignment: start;
-                        Text { text: "OpenRouter API 金鑰（僅保留於本次執行）"; color: c-fg; wrap: word-wrap; }
+                        Text { text: "OpenRouter API 金鑰"; color: c-fg; wrap: word-wrap; }
                         LineEdit { text <=> ai-key; input-type: password; placeholder-text: "OpenRouter API key"; }
+                        HorizontalLayout { spacing: 6px;
+                            Button { text: "儲存金鑰"; clicked => { ai-save-key(); } }
+                            Button { text: "本次使用"; clicked => { ai-use-key(); } }
+                            Button { text: "刪除已存金鑰"; clicked => { ai-clear-key(); } }
+                        }
+                        Text { text: ai-key-status; color: c-fg; wrap: word-wrap; }
+                        Text { text: "Windows 使用目前帳戶加密保存；儲存後才會套用。"; color: c-gutter-fg; wrap: word-wrap; }
                         Text { text: "免費模型"; color: c-fg; }
                         LineEdit { text <=> ai-model; placeholder-text: "openrouter/free 或模型名稱:free"; }
                         Text { text: "僅支援 openrouter/free 或以 :free 結尾的模型。"; color: c-gutter-fg; wrap: word-wrap; }
