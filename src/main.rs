@@ -21,6 +21,7 @@ mod recovery;
 mod file_watch;
 mod bookmarks;
 mod render_model;
+mod agent;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
@@ -320,7 +321,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi(if cfg!(windows) { "安裝檔案總管右鍵選單「用 NotEdit 開啟」" } else { "安裝檔案管理員「用 NotEdit 開啟」(.desktop)" }, "", "installshell"),
             mi(if cfg!(windows) { "移除檔案總管右鍵選單" } else { "移除檔案管理員整合 (.desktop)" }, "", "uninstallshell"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
-        menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
+        menu("工具", vec![mi("AI 文件助手...", "", "ai"), sep(), mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
             mi("比較兩個檔案 (左：目前 / 右：分割檢視或選擇檔案)", "", "compare"), en("下一個差異", "F7", "diffnext", st.docs[st.views[0].doc].diff.is_some()), en("上一個差異", "Shift+F7", "diffprev", st.docs[st.views[0].doc].diff.is_some()),
             en("重新比較", "", "recompare", st.docs[st.views[0].doc].diff.is_some()), en("結束比較", "", "compareclear", st.docs.iter().any(|d| d.diff.is_some()))]),
         menu("巨集", vec![chk(if st.macro_rec { "停止錄製" } else { "開始錄製" }, "Ctrl+Shift+R", "macrorec", st.macro_rec),
@@ -1057,6 +1058,7 @@ impl App {
             }
         }
         match a {
+            "ai" => { ui.set_ai_visible(true); }
             "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
                 if let Some(files) = crate::dlg::file().set_title("開啟舊檔")
@@ -1997,11 +1999,33 @@ impl App {
         let edits: Vec<(usize, usize, String)> = {
             let st = self.st.borrow();
             let v = &st.views[vi];
-            let r = &st.docs[v.doc].buf.rope;
+            let doc = &st.docs[v.doc];
+            let r = &doc.buf.rope;
+            let has_list_caret = doc.lang == "markdown" && v.sels.iter().any(|s| {
+                let line = r.char_to_line(s.start());
+                let ls = r.line_to_char(line);
+                s.is_empty() && s.start() == ls + editor::line_len(r, line)
+                    && editor::markdown_list_next(&r.slice(ls..s.start()).to_string()).is_some()
+            });
+            let code_ranges: Vec<_> = if has_list_caret {
+                let text = r.to_string();
+                pulldown_cmark::Parser::new(&text).into_offset_iter().filter_map(|(event, range)| {
+                    if matches!(event, pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_))) { Some(range) } else { None }
+                }).collect()
+            } else { Vec::new() };
             v.sels.iter().map(|s| {
                 let line = r.char_to_line(s.start());
                 let ls = r.line_to_char(line);
                 let indent: String = r.slice(ls..s.start()).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                let at_end = s.start() == ls + editor::line_len(r, line);
+                let byte = r.char_to_byte(s.start());
+                if doc.lang == "markdown" && s.is_empty() && at_end && !code_ranges.iter().any(|range| range.start <= byte && byte <= range.end) {
+                    let current = r.slice(ls..s.start()).to_string();
+                    if let Some((next, empty)) = editor::markdown_list_next(&current) {
+                        if empty { return (ls, s.end(), indent); }
+                        return (s.start(), s.end(), format!("\n{next}"));
+                    }
+                }
                 (s.start(), s.end(), format!("\n{indent}"))
             }).collect()
         };
@@ -2015,7 +2039,8 @@ impl App {
             let r = &st.docs[v.doc].buf.rope;
             v.sels.iter().any(|s| r.char_to_line(s.start()) != r.char_to_line(s.end())) || outdent
         };
-        if !block { self.insert_text(vi, "\t"); return; }
+        let json = { let st = self.st.borrow(); st.docs[st.views[vi].doc].lang == "json" };
+        if !block { self.insert_text(vi, if json { "    " } else { "\t" }); return; }
         // indent / outdent every touched line, keeping the selections over the same text
         let (edits, sels_lines) = {
             let st = self.st.borrow();
@@ -2035,7 +2060,7 @@ impl App {
                     let n = if chars.first() == Some(&'\t') { 1 } else { chars.iter().take(editor::TAB).take_while(|c| **c == ' ').count() };
                     if n > 0 { edits.push((ls, ls + n, String::new())); }
                 } else if editor::line_len(r, l) > 0 || lines.len() == 1 {
-                    edits.push((ls, ls, "\t".to_string()));
+                    edits.push((ls, ls, if json { "    " } else { "\t" }.to_string()));
                 }
             }
             (edits, v.sels.clone())
@@ -2569,7 +2594,7 @@ fn word_end(r: &ropey::Rope, pos: usize) -> usize {
 /// line comment prefix, or (open, close) for block-only languages
 fn comment_syntax(lang: &str) -> Option<(&'static str, &'static str)> {
     Some(match lang {
-        "rust" | "c" | "cpp" | "cs" | "java" | "javascript" | "json" | "slint" => ("// ", ""),
+        "rust" | "c" | "cpp" | "cs" | "java" | "javascript" | "slint" => ("// ", ""),
         "python" | "shell" | "yaml" => ("# ", ""),
         "ini" => ("; ", ""),
         "sql" => ("-- ", ""),
@@ -2726,6 +2751,7 @@ fn main() -> Result<(), slint::PlatformError> {
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
+    if let Ok(key) = std::env::var("OPENROUTER_API_KEY") { ui.set_ai_key(key.into()); }
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
     // Close open menus first and run the action after the next frame, so a modal
@@ -2737,6 +2763,50 @@ fn main() -> Result<(), slint::PlatformError> {
             let w = Rc::downgrade(&a);
             slint::Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = w.upgrade() { a.action(&s) } });
         } else { a.action(&s) }
+    });
+    cb!(on_ai_send, |a| {
+        let ui = a.ui();
+        if ui.get_ai_running() { return; }
+        let key = ui.get_ai_key().to_string();
+        let model = ui.get_ai_model().trim().to_string();
+        let prompt = ui.get_ai_prompt().to_string();
+        let history = ui.get_ai_history().to_string();
+        let document = ui.get_ai_include_document().then(|| a.text());
+        let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
+        ui.set_ai_running(true);
+        ui.set_ai_status("正在請求 OpenRouter...".into());
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            let result = agent::request(&key, &model, &prompt, &history, document.as_deref());
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_ai_running(false);
+                match result {
+                    Ok(text) => {
+                        ui.set_ai_history(format!("{history}\n使用者：{prompt}\n助手：{text}\n").into());
+                        ui.set_ai_result(text.into());
+                        ui.set_ai_has_source(document.is_some());
+                        ui.set_ai_source(document.unwrap_or_default().into());
+                        ui.set_ai_source_title(title.into());
+                        ui.set_ai_status("完成：請檢查內容後套用".into());
+                    }
+                    Err(e) => ui.set_ai_status(e.into()),
+                }
+            });
+        });
+    });
+    cb!(on_ai_apply, |a, new_doc: bool| {
+        let ui = a.ui();
+        if !new_doc && ui.get_ai_has_source() {
+            let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
+            if title != ui.get_ai_source_title().as_str() || a.text() != ui.get_ai_source().as_str() {
+                ui.set_ai_status("文件已變更或切換，請重新送出以避免覆蓋變更".into()); return;
+            }
+        }
+        if !new_doc && a.is_hex(a.av()) { ui.set_ai_status("請先切換回文字模式".into()); return; }
+        if new_doc { a.action("new"); a.st.borrow_mut().active = 0; }
+        a.set_text(ui.get_ai_result().to_string());
+        ui.set_ai_visible(false);
+        ui.set_ai_status("已套用，可使用 Ctrl+Z 復原；請儲存文件".into());
     });
     cb!(on_ed_input, |a, v: i32, t: SharedString| { a.ed_input(v as usize & 1, &t) });
     cb!(on_ed_mouse, |a, v: i32, k: i32, x: f32, y: f32, c: bool, s: bool, al: bool| { a.ed_mouse(v as usize & 1, k, x, y, c, s, al) });

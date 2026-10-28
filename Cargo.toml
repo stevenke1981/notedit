@@ -26,6 +26,7 @@ spellbook = "0.4.2"
 syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing", "html", "yaml-load"] }
 unicode-width = "0.2"
 winit = { version = "0.30", default-features = false }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

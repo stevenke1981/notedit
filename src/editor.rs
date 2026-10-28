@@ -8,6 +8,26 @@ use unicode_width::UnicodeWidthChar;
 
 pub const TAB: usize = 4;
 
+/// Continuation for a Markdown list item at the end of a line.
+pub fn markdown_list_next(line: &str) -> Option<(String, bool)> {
+    let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let indent = &line[..indent_len];
+    let rest = &line[indent_len..];
+    let bytes = rest.as_bytes();
+    let (marker, content) = if bytes.len() >= 2 && matches!(bytes[0], b'-' | b'+' | b'*') && bytes[1] == b' ' {
+        (rest[..2].to_string(), &rest[2..])
+    } else {
+        let n = bytes.iter().take_while(|b| b.is_ascii_digit()).count();
+        if n == 0 || n > 9 || bytes.get(n).is_none_or(|b| !matches!(b, b'.' | b')')) || bytes.get(n + 1) != Some(&b' ') { return None; }
+        let number = rest[..n].parse::<u64>().ok()?.checked_add(1)?;
+        (format!("{number}{} ", bytes[n] as char), &rest[n + 2..])
+    };
+    let (task, content) = if content.starts_with("[ ] ") || content.starts_with("[x] ") || content.starts_with("[X] ") {
+        ("[ ] ", &content[4..])
+    } else { ("", content) };
+    Some((format!("{indent}{marker}{task}"), content.trim().is_empty()))
+}
+
 /// A selection in char offsets. `anchor == head` is a plain caret.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sel { pub anchor: usize, pub head: usize, pub goal: Option<usize> }
@@ -414,6 +434,16 @@ pub fn collect_words(rope: &Rope, limit_chars: usize) -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_list_continuation() {
+        assert_eq!(markdown_list_next("  - 中文"), Some(("  - ".into(), false)));
+        assert_eq!(markdown_list_next("9. item"), Some(("10. ".into(), false)));
+        assert_eq!(markdown_list_next("* [x] done"), Some(("* [ ] ".into(), false)));
+        assert_eq!(markdown_list_next("  - [ ] "), Some(("  - [ ] ".into(), true)));
+        assert_eq!(markdown_list_next("-not a list"), None);
+        assert_eq!(markdown_list_next("1234567890. item"), None);
+    }
 
     #[test]
     fn multi_insert_and_map() {

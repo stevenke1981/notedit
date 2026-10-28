@@ -1,4 +1,4 @@
-import { Button, LineEdit, CheckBox, ScrollView, ListView } from "std-widgets.slint";
+import { Button, LineEdit, TextEdit, CheckBox, ScrollView, ListView } from "std-widgets.slint";
 import { EditorView, EdState, Theme } from "editor.slint";
 export { Theme, EdState, EdTok, EdRect, EdRow, EdCaret, MapLine } from "editor.slint";
 import "fonts/DejaVuSansMono.ttf";
@@ -182,6 +182,20 @@ export component AppWindow inherits Window {
     callback tab-move(int, int);
     callback find-all();
     callback hit-clicked(int);
+    in-out property <bool> ai-visible: false;
+    in-out property <string> ai-key;
+    in-out property <string> ai-model: "openrouter/free";
+    in-out property <string> ai-prompt;
+    in-out property <string> ai-result;
+    in-out property <string> ai-status;
+    in-out property <bool> ai-include-document: false;
+    in-out property <bool> ai-running: false;
+    in-out property <string> ai-source;
+    in-out property <string> ai-source-title;
+    in-out property <bool> ai-has-source: false;
+    in-out property <string> ai-history;
+    callback ai-send();
+    callback ai-apply(bool);
 
     public function focus-editor() { if (split && active-view == 1) { ev1.focus-in(); } else { ev0.focus-in(); } }
 
@@ -581,6 +595,37 @@ export component AppWindow inherits Window {
             Text { text: "以 Rust + Slint 製作的類 Notepad++ 文字編輯器"; }
             Text { text: "支援 HTML / Markdown 預覽"; }
             Button { text: "確定"; clicked => { about-visible = false; } }
+        }
+    }
+
+    if ai-visible: Dialog {
+        title: "AI 文件助手 — OpenRouter 免費模型";
+        x: max(0px, (parent.width - self.width) / 2); y: 35px;
+        width: min(760px, parent.width); height: min(620px, parent.height - 40px);
+        close => { ai-visible = false; }
+        VerticalLayout { padding: 10px; spacing: 6px;
+            Text { text: "API 金鑰（僅保留於本次執行）："; }
+            LineEdit { text <=> ai-key; input-type: password; placeholder-text: "OpenRouter API key"; }
+            HorizontalLayout { spacing: 8px;
+                Text { text: "免費模型："; vertical-alignment: center; }
+                LineEdit { text <=> ai-model; placeholder-text: "openrouter/free 或模型名稱:free"; }
+            }
+            CheckBox { text: "傳送目前文件內容供 AI 編輯（內容會傳送至 OpenRouter）"; checked <=> ai-include-document; }
+            Text { text: "每次請求也會傳送先前對話及回覆；可按「清除對話」。"; }
+            Text { text: "指令："; }
+            TextEdit { text <=> ai-prompt; height: 75px; placeholder-text: "例如：建立一份 JSON 設定檔，或修改目前 Markdown 文件"; }
+            HorizontalLayout { spacing: 8px;
+                Button { text: "送出"; enabled: !ai-running; clicked => { ai-send(); } }
+                Button { text: "清除對話"; enabled: !ai-running; clicked => { ai-history = ""; ai-result = ""; ai-status = "已清除對話"; ai-has-source = false; } }
+                Text { text: ai-status; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            }
+            Text { text: "回覆預覽（可自行修改後套用）："; }
+            TextEdit { text <=> ai-result; font-family: root.mono; vertical-stretch: 1; }
+            HorizontalLayout { spacing: 8px;
+                Button { text: "套用至目前文件"; enabled: !ai-running && !ai-result.is-empty; clicked => { ai-apply(false); } }
+                Button { text: "建立新文件"; enabled: !ai-running && !ai-result.is-empty; clicked => { ai-apply(true); } }
+                Button { text: "關閉"; clicked => { ai-visible = false; } }
+            }
         }
     }
 
