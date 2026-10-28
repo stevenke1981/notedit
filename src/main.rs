@@ -21,6 +21,9 @@ mod recovery;
 mod file_watch;
 mod bookmarks;
 mod render_model;
+mod agent;
+mod credentials;
+mod ai_files;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
@@ -315,12 +318,13 @@ fn build_menus(st: &State) -> Vec<Menu> {
             chk("Shift-JIS (日文)", "", "enc:sjis", d.encoding == encoding_rs::SHIFT_JIS), chk("Windows-1252 (西歐)", "", "enc:1252", d.encoding == encoding_rs::WINDOWS_1252)]),
         menu("語言", lang_items),
         menu("設定", vec![chk("自動換行", "", "wrap", st.wrap), chk("顯示行號", "", "linenumbers", st.line_numbers), chk("深色主題", "", "dark", st.dark),
+            mi("OpenRouter API 金鑰...", "", "ai-settings"),
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("打字機模式 (游標行置中)", "", "typewriter", st.cfg.typewriter), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
             mi("編輯佈景主題色彩 / 快捷鍵 (settings.json)...", "", "editconfig"), mi("開啟設定檔所在資料夾", "", "openconfig"), sep(),
             mi(if cfg!(windows) { "安裝檔案總管右鍵選單「用 NotEdit 開啟」" } else { "安裝檔案管理員「用 NotEdit 開啟」(.desktop)" }, "", "installshell"),
             mi(if cfg!(windows) { "移除檔案總管右鍵選單" } else { "移除檔案管理員整合 (.desktop)" }, "", "uninstallshell"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
-        menu("工具", vec![mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
+        menu("工具", vec![mi("AI 文件助手...", "", "ai"), sep(), mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
             mi("比較兩個檔案 (左：目前 / 右：分割檢視或選擇檔案)", "", "compare"), en("下一個差異", "F7", "diffnext", st.docs[st.views[0].doc].diff.is_some()), en("上一個差異", "Shift+F7", "diffprev", st.docs[st.views[0].doc].diff.is_some()),
             en("重新比較", "", "recompare", st.docs[st.views[0].doc].diff.is_some()), en("結束比較", "", "compareclear", st.docs.iter().any(|d| d.diff.is_some()))]),
         menu("巨集", vec![chk(if st.macro_rec { "停止錄製" } else { "開始錄製" }, "Ctrl+Shift+R", "macrorec", st.macro_rec),
@@ -352,9 +356,11 @@ struct App {
     st: RefCell<State>,
     me: RefCell<std::rc::Weak<App>>,
     clip: RefCell<Option<arboard::Clipboard>>,
+    ai_key: RefCell<String>,
     dirty: std::cell::Cell<bool>,
     rkey: RefCell<[(f32, f32, f32, f32); 2]>,
     ticker: slint::Timer,
+    preview_timer: slint::Timer,
     /// fires after 10 s without rendering; switches to a static caret
     idle: slint::Timer,
 }
@@ -581,6 +587,7 @@ impl App {
     }
 
     fn refresh_preview(&self) {
+        self.preview_timer.stop();
         let ui = self.ui();
         let st = self.st.borrow();
         if !st.preview { return; }
@@ -1057,6 +1064,8 @@ impl App {
             }
         }
         match a {
+            "ai" => { ui.set_ai_visible(!ui.get_ai_visible()); }
+            "ai-settings" => { ui.set_ai_visible(true); ui.set_ai_page(2); }
             "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
                 if let Some(files) = crate::dlg::file().set_title("開啟舊檔")
@@ -1329,7 +1338,12 @@ impl App {
 
     fn after_edit(&self) {
         self.refresh_meta();
-        if self.st.borrow().preview { self.refresh_preview(); }
+        if self.st.borrow().preview {
+            let me = self.me.borrow().clone();
+            self.preview_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(180), move || {
+                if let Some(app) = me.upgrade() { app.refresh_preview(); }
+            });
+        }
         self.render_all();
     }
 
@@ -1997,11 +2011,33 @@ impl App {
         let edits: Vec<(usize, usize, String)> = {
             let st = self.st.borrow();
             let v = &st.views[vi];
-            let r = &st.docs[v.doc].buf.rope;
+            let doc = &st.docs[v.doc];
+            let r = &doc.buf.rope;
+            let has_list_caret = doc.lang == "markdown" && v.sels.iter().any(|s| {
+                let line = r.char_to_line(s.start());
+                let ls = r.line_to_char(line);
+                s.is_empty() && s.start() == ls + editor::line_len(r, line)
+                    && editor::markdown_list_next(&r.slice(ls..s.start()).to_string()).is_some()
+            });
+            let code_ranges: Vec<_> = if has_list_caret {
+                let text = r.to_string();
+                pulldown_cmark::Parser::new(&text).into_offset_iter().filter_map(|(event, range)| {
+                    if matches!(event, pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_))) { Some(range) } else { None }
+                }).collect()
+            } else { Vec::new() };
             v.sels.iter().map(|s| {
                 let line = r.char_to_line(s.start());
                 let ls = r.line_to_char(line);
                 let indent: String = r.slice(ls..s.start()).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                let at_end = s.start() == ls + editor::line_len(r, line);
+                let byte = r.char_to_byte(s.start());
+                if doc.lang == "markdown" && s.is_empty() && at_end && !code_ranges.iter().any(|range| range.start <= byte && byte <= range.end) {
+                    let current = r.slice(ls..s.start()).to_string();
+                    if let Some((next, empty)) = editor::markdown_list_next(&current) {
+                        if empty { return (ls, s.end(), indent); }
+                        return (s.start(), s.end(), format!("\n{next}"));
+                    }
+                }
                 (s.start(), s.end(), format!("\n{indent}"))
             }).collect()
         };
@@ -2015,7 +2051,8 @@ impl App {
             let r = &st.docs[v.doc].buf.rope;
             v.sels.iter().any(|s| r.char_to_line(s.start()) != r.char_to_line(s.end())) || outdent
         };
-        if !block { self.insert_text(vi, "\t"); return; }
+        let json = { let st = self.st.borrow(); st.docs[st.views[vi].doc].lang == "json" };
+        if !block { self.insert_text(vi, if json { "    " } else { "\t" }); return; }
         // indent / outdent every touched line, keeping the selections over the same text
         let (edits, sels_lines) = {
             let st = self.st.borrow();
@@ -2035,7 +2072,7 @@ impl App {
                     let n = if chars.first() == Some(&'\t') { 1 } else { chars.iter().take(editor::TAB).take_while(|c| **c == ' ').count() };
                     if n > 0 { edits.push((ls, ls + n, String::new())); }
                 } else if editor::line_len(r, l) > 0 || lines.len() == 1 {
-                    edits.push((ls, ls, "\t".to_string()));
+                    edits.push((ls, ls, if json { "    " } else { "\t" }.to_string()));
                 }
             }
             (edits, v.sels.clone())
@@ -2569,7 +2606,7 @@ fn word_end(r: &ropey::Rope, pos: usize) -> usize {
 /// line comment prefix, or (open, close) for block-only languages
 fn comment_syntax(lang: &str) -> Option<(&'static str, &'static str)> {
     Some(match lang {
-        "rust" | "c" | "cpp" | "cs" | "java" | "javascript" | "json" | "slint" => ("// ", ""),
+        "rust" | "c" | "cpp" | "cs" | "java" | "javascript" | "slint" => ("// ", ""),
         "python" | "shell" | "yaml" => ("# ", ""),
         "ini" => ("; ", ""),
         "sql" => ("-- ", ""),
@@ -2722,10 +2759,15 @@ fn main() -> Result<(), slint::PlatformError> {
         side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
         side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(), idle: Default::default(),
+    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), preview_timer: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
+    match credentials::load() {
+        Ok(Some(key)) => { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key.into()); ui.set_ai_key_status("已載入 NotEdit 儲存的金鑰".into()); }
+        Ok(None) => if let Ok(key) = std::env::var("OPENROUTER_API_KEY") { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key.into()); ui.set_ai_key_status("使用環境變數金鑰；可另行儲存到 NotEdit".into()); },
+        Err(e) => ui.set_ai_key_status(format!("無法讀取已儲存的金鑰：{e}").into()),
+    }
 
     macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
     // Close open menus first and run the action after the next frame, so a modal
@@ -2737,6 +2779,130 @@ fn main() -> Result<(), slint::PlatformError> {
             let w = Rc::downgrade(&a);
             slint::Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = w.upgrade() { a.action(&s) } });
         } else { a.action(&s) }
+    });
+    cb!(on_ai_save_key, |a| {
+        let ui = a.ui();
+        let key = ui.get_ai_key();
+        if key.trim().is_empty() { ui.set_ai_key_status("請先輸入金鑰".into()); return; }
+        match credentials::save(key.trim()) { Ok(()) => { *a.ai_key.borrow_mut() = key.trim().to_string(); ui.set_ai_key_status("已加密儲存金鑰".into()); }, Err(e) => ui.set_ai_key_status(format!("儲存金鑰失敗：{e}").into()) }
+    });
+    cb!(on_ai_use_key, |a| {
+        let ui = a.ui();
+        let key = ui.get_ai_key();
+        if key.trim().is_empty() { ui.set_ai_key_status("請先輸入金鑰".into()); return; }
+        *a.ai_key.borrow_mut() = key.trim().to_string();
+        ui.set_ai_key_status("金鑰僅用於本次執行，未變更已儲存金鑰".into());
+    });
+    cb!(on_ai_clear_key, |a| {
+        let ui = a.ui();
+        match credentials::clear() { Ok(()) => { a.ai_key.borrow_mut().clear(); ui.set_ai_key("".into()); ui.set_ai_key_status("已刪除儲存的金鑰".into()); }, Err(e) => ui.set_ai_key_status(format!("刪除金鑰失敗：{e}").into()) }
+    });
+    cb!(on_ai_send, |a| {
+        let ui = a.ui();
+        if ui.get_ai_running() { return; }
+        let key = a.ai_key.borrow().clone();
+        let model = ui.get_ai_model().trim().to_string();
+        let prompt = ui.get_ai_prompt().to_string();
+        let (role, role_name) = match ui.get_ai_role() {
+            1 => (agent::Role::Proofread, "校稿"),
+            2 => {
+                let language = match ui.get_ai_language() {
+                    0 => "繁體中文（台灣）".to_string(), 1 => "簡體中文".into(), 2 => "英文".into(), 3 => "日文".into(),
+                    4 => "韓文".into(), 5 => "越南文".into(), 6 => "泰文".into(), 7 => "印尼文".into(),
+                    8 => "法文".into(), 9 => "德文".into(), 10 => "西班牙文".into(),
+                    _ => ui.get_ai_language_custom().trim().to_string(),
+                };
+                if language.is_empty() { ui.set_ai_status("請輸入自訂翻譯語言".into()); return; }
+                (agent::Role::Translate(language), "翻譯")
+            }
+            3 => (agent::Role::Polish, "文字潤飾"), 4 => (agent::Role::Summarize, "摘要"),
+            5 => (agent::Role::Format, "格式整理"), _ => (agent::Role::General, "通用助手"),
+        };
+        let history = ui.get_ai_history().to_string();
+        let mode = ui.get_ai_mode();
+        let create_path = if mode == 1 {
+            let Some(path) = crate::dlg::file().set_title("AI 自動建立新檔（不覆蓋既有檔案）").add_filter("文件", &["md", "json", "txt"]).save_file() else { return; };
+            if path.exists() { ui.set_ai_status("檔案已存在，請選擇新檔名".into()); return; }
+            Some(path)
+        } else { None };
+        let document = (ui.get_ai_include_document() || mode == 2).then(|| a.text());
+        let target = if mode == 2 {
+            let st = a.st.borrow();
+            let d = &st.docs[st.views[st.view_idx()].doc];
+            let Some(path) = d.path.clone() else { ui.set_ai_status("自動修改前請先儲存目前文件".into()); return; };
+            if d.hex.is_some() { ui.set_ai_status("自動修改僅支援文字文件".into()); return; }
+            if file_watch::stamp(&path).ok() != d.disk_stamp { ui.set_ai_status("磁碟檔案已變更，請先重新載入後再執行".into()); return; }
+            let disk = match std::fs::read(&path) { Ok(bytes) => bytes, Err(e) => { ui.set_ai_status(format!("無法讀取原檔：{e}").into()); return; } };
+            let buffer = match encode(d) { Ok(bytes) => bytes, Err(e) => { ui.set_ai_status(e.into()); return; } };
+            Some((path, disk, buffer))
+        } else { None };
+        let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
+        ui.set_ai_running(true);
+        ui.set_ai_status("正在請求 OpenRouter...".into());
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            let result = agent::request(&key, &model, &prompt, &history, document.as_deref(), role);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_ai_running(false);
+                match result {
+                    Ok(text) => {
+                        ui.set_ai_history(format!("{history}\n使用者（{role_name}）：{prompt}\n助手：{text}\n").into());
+                        ui.set_ai_result(text.into());
+                        ui.set_ai_page(1);
+                        ui.set_ai_has_source(document.is_some());
+                        ui.set_ai_source(document.as_deref().unwrap_or_default().into());
+                        ui.set_ai_source_title(title.into());
+                        ui.set_ai_status("完成：請檢查內容後套用".into());
+                        APP.with(|slot| if let Some(app) = slot.borrow().clone() {
+                            let result_text = ui.get_ai_result().to_string();
+                            if let Some(path) = create_path {
+                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) && serde_json::from_str::<serde_json::Value>(&result_text).is_err() {
+                                    ui.set_ai_status("模型輸出的 JSON 無效，未建立檔案；請檢查預覽".into()); return;
+                                }
+                                match ai_files::create(&path, result_text.as_bytes()) {
+                                    Ok(()) => { app.open_path(path.clone()); ui.set_ai_status(format!("已建立：{}", path.display()).into()); }
+                                    Err(e) => ui.set_ai_status(format!("建立檔案失敗：{e}").into()),
+                                }
+                            } else if let Some((path, disk, buffer)) = target {
+                                let current = { let st = app.st.borrow(); let d = &st.docs[st.views[st.view_idx()].doc]; d.path.as_ref() == Some(&path) && document.as_deref() == Some(d.text().as_str()) };
+                                if !current || std::fs::read(&path).ok().as_deref() != Some(disk.as_slice()) {
+                                    ui.set_ai_status("文件已變更或切換，未自動修改；請重新送出".into()); return;
+                                }
+                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) && serde_json::from_str::<serde_json::Value>(&result_text).is_err() {
+                                    ui.set_ai_status("模型輸出的 JSON 無效，未修改檔案；請檢查預覽".into()); return;
+                                }
+                                match ai_files::backup(&path, &disk, &buffer) {
+                                    Ok((disk_backup, buffer_backup)) => {
+                                        if std::fs::read(&path).ok().as_deref() != Some(disk.as_slice()) {
+                                            ui.set_ai_status(format!("備份期間原檔已變更，未修改；備份：{}", disk_backup.display()).into()); return;
+                                        }
+                                        app.set_text(result_text);
+                                        let idx = app.cd();
+                                        if app.save(idx, false) { ui.set_ai_status(format!("已修改並儲存；備份：{}、{}", disk_backup.display(), buffer_backup.display()).into()); }
+                                        else { ui.set_ai_status(format!("儲存失敗；原檔及備份保留於 {}", disk_backup.display()).into()); }
+                                    }
+                                    Err(e) => ui.set_ai_status(format!("備份失敗，未修改文件：{e}").into()),
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => ui.set_ai_status(e.into()),
+                }
+            });
+        });
+    });
+    cb!(on_ai_apply, |a, new_doc: bool| {
+        let ui = a.ui();
+        if !new_doc && ui.get_ai_has_source() {
+            let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
+            if title != ui.get_ai_source_title().as_str() || a.text() != ui.get_ai_source().as_str() {
+                ui.set_ai_status("文件已變更或切換，請重新送出以避免覆蓋變更".into()); return;
+            }
+        }
+        if !new_doc && a.is_hex(a.av()) { ui.set_ai_status("請先切換回文字模式".into()); return; }
+        if new_doc { a.action("new"); a.st.borrow_mut().active = 0; }
+        a.set_text(ui.get_ai_result().to_string());
+        ui.set_ai_status("已套用，可使用 Ctrl+Z 復原；請儲存文件".into());
     });
     cb!(on_ed_input, |a, v: i32, t: SharedString| { a.ed_input(v as usize & 1, &t) });
     cb!(on_ed_mouse, |a, v: i32, k: i32, x: f32, y: f32, c: bool, s: bool, al: bool| { a.ed_mouse(v as usize & 1, k, x, y, c, s, al) });
@@ -2897,6 +3063,29 @@ fn main() -> Result<(), slint::PlatformError> {
                     env!("CARGO_PKG_VERSION"), st.docs.len(), st.docs[0].title, st.docs[0].buf.rope.len_lines(), st.side_syms.len(),
                     sz.width, sz.height, ui.window().scale_factor())
             };
+            if std::env::var_os("NOTEDIT_PREVIEW_SMOKE").is_some() && ui.get_show_preview() {
+                a.select_bytes(0, 0);
+                let before = ui.get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
+                let baseline = std::env::var_os("NOTEDIT_PREVIEW_BASELINE").is_some();
+                let start = Instant::now();
+                for _ in 0..10 {
+                    ui.invoke_ed_input(0, "x".into());
+                    if baseline { a.refresh_preview(); }
+                }
+                let input_us = start.elapsed().as_micros();
+                let during = ui.get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
+                let a = a.clone();
+                let out = out.clone();
+                slint::Timer::single_shot(Duration::from_millis(400), move || {
+                    let after = a.ui().get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
+                    let result = if baseline && during != before && after == during && after.contains("xxxxxxxxxx") { "PREVIEW_BASELINE_OK" }
+                        else if !baseline && during == before && after != before && after.contains("xxxxxxxxxx") { "PREVIEW_DEBOUNCE_OK" }
+                        else { "PREVIEW_SMOKE_FAILED" };
+                    let _ = std::fs::write(&out, format!("{report}{result} edits=10 input_us={input_us}\n"));
+                    let _ = slint::quit_event_loop();
+                });
+                return;
+            }
             let _ = std::fs::write(&out, report);
             let _ = slint::quit_event_loop();
         });
