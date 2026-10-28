@@ -1058,7 +1058,7 @@ impl App {
             }
         }
         match a {
-            "ai" => { ui.set_ai_visible(true); }
+            "ai" => { ui.set_ai_visible(!ui.get_ai_visible()); }
             "new" => { self.remember_cursor(); { let mut st = self.st.borrow_mut(); st.counter += 1; let n = st.counter; st.docs.push(Doc::new(n)); st.cur = st.docs.len() - 1; } self.refresh_all(); }
             "open" => {
                 if let Some(files) = crate::dlg::file().set_title("開啟舊檔")
@@ -2770,6 +2770,11 @@ fn main() -> Result<(), slint::PlatformError> {
         let key = ui.get_ai_key().to_string();
         let model = ui.get_ai_model().trim().to_string();
         let prompt = ui.get_ai_prompt().to_string();
+        let (role, role_name) = match ui.get_ai_role() {
+            1 => (agent::Role::Proofread, "校稿"), 2 => (agent::Role::Translate, "翻譯"),
+            3 => (agent::Role::Polish, "文字潤飾"), 4 => (agent::Role::Summarize, "摘要"),
+            5 => (agent::Role::Format, "格式整理"), _ => (agent::Role::General, "通用助手"),
+        };
         let history = ui.get_ai_history().to_string();
         let document = ui.get_ai_include_document().then(|| a.text());
         let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
@@ -2777,13 +2782,14 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_ai_status("正在請求 OpenRouter...".into());
         let weak = ui.as_weak();
         std::thread::spawn(move || {
-            let result = agent::request(&key, &model, &prompt, &history, document.as_deref());
+            let result = agent::request(&key, &model, &prompt, &history, document.as_deref(), role);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_ai_running(false);
                 match result {
                     Ok(text) => {
-                        ui.set_ai_history(format!("{history}\n使用者：{prompt}\n助手：{text}\n").into());
+                        ui.set_ai_history(format!("{history}\n使用者（{role_name}）：{prompt}\n助手：{text}\n").into());
                         ui.set_ai_result(text.into());
+                        ui.set_ai_page(1);
                         ui.set_ai_has_source(document.is_some());
                         ui.set_ai_source(document.unwrap_or_default().into());
                         ui.set_ai_source_title(title.into());
@@ -2805,7 +2811,6 @@ fn main() -> Result<(), slint::PlatformError> {
         if !new_doc && a.is_hex(a.av()) { ui.set_ai_status("請先切換回文字模式".into()); return; }
         if new_doc { a.action("new"); a.st.borrow_mut().active = 0; }
         a.set_text(ui.get_ai_result().to_string());
-        ui.set_ai_visible(false);
         ui.set_ai_status("已套用，可使用 Ctrl+Z 復原；請儲存文件".into());
     });
     cb!(on_ed_input, |a, v: i32, t: SharedString| { a.ed_input(v as usize & 1, &t) });

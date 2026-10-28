@@ -1,4 +1,4 @@
-import { Button, LineEdit, TextEdit, CheckBox, ScrollView, ListView } from "std-widgets.slint";
+import { Button, LineEdit, TextEdit, CheckBox, ComboBox, ScrollView, ListView } from "std-widgets.slint";
 import { EditorView, EdState, Theme } from "editor.slint";
 export { Theme, EdState, EdTok, EdRect, EdRow, EdCaret, MapLine } from "editor.slint";
 import "fonts/DejaVuSansMono.ttf";
@@ -183,6 +183,8 @@ export component AppWindow inherits Window {
     callback find-all();
     callback hit-clicked(int);
     in-out property <bool> ai-visible: false;
+    in-out property <int> ai-page: 0;
+    in-out property <int> ai-role: 0;
     in-out property <string> ai-key;
     in-out property <string> ai-model: "openrouter/free";
     in-out property <string> ai-prompt;
@@ -284,6 +286,10 @@ export component AppWindow inherits Window {
                 ToolBtn { icon: @image-url("icons/linenumbers.svg"); tip: "顯示行號"; clicked => { menu-action("linenumbers"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 ToolBtn { icon: @image-url("icons/selectall.svg"); tip: "全選 (Ctrl+A)"; clicked => { menu-action("selectall"); } hover(t, x, h) => { show-tip(t, x, h); } }
                 ToolBtn { icon: @image-url("icons/preview.svg"); tip: "HTML / Markdown 預覽"; clicked => { menu-action("preview"); } hover(t, x, h) => { show-tip(t, x, h); } }
+                Rectangle { width: 64px; background: ai-visible ? c-hover : aita.has-hover ? c-hover : transparent;
+                    Text { text: "AI 助手"; color: c-fg; horizontal-alignment: center; vertical-alignment: center; }
+                    aita := TouchArea { clicked => { ai-visible = !ai-visible; } }
+                }
                 Rectangle {}
             }
         }
@@ -398,6 +404,59 @@ export component AppWindow inherits Window {
                 map-click(f) => { ed-map(1, f); }
                 focused => { ed-focused(1); }
                 context(x, y) => { ctx-x = x - root.absolute-position.x; ctx-y = y - root.absolute-position.y; open-menu = -1; context-request("editor", 1); }
+            }
+            if ai-visible: Rectangle { width: 1px; background: c-border; }
+            if ai-visible: Rectangle {
+                width: 360px; background: c-editor;
+                VerticalLayout {
+                    Rectangle { height: 28px; background: c-chrome;
+                        HorizontalLayout { padding-left: 5px; padding-right: 4px; spacing: 2px;
+                            for label[i] in ["對話", "結果", "設定"]: Rectangle {
+                                width: 64px; background: ai-page == i ? c-tab-active : aipa.has-hover ? c-hover : transparent;
+                                Text { text: label; color: c-fg; horizontal-alignment: center; vertical-alignment: center; font-weight: ai-page == i ? 700 : 400; }
+                                aipa := TouchArea { clicked => { ai-page = i; } }
+                            }
+                            Rectangle {}
+                            Rectangle { width: 24px;
+                                Text { text: "✕"; color: c-fg; horizontal-alignment: center; vertical-alignment: center; }
+                                TouchArea { clicked => { ai-visible = false; focus-editor(); } }
+                            }
+                        }
+                    }
+                    if ai-page == 0: VerticalLayout { padding: 8px; spacing: 6px;
+                        HorizontalLayout { spacing: 6px;
+                            Text { text: "角色"; color: c-fg; vertical-alignment: center; }
+                            ComboBox { model: ["通用助手", "校稿", "翻譯", "文字潤飾", "摘要", "格式整理"]; current-index <=> ai-role; }
+                        }
+                        Text { text: "對話紀錄"; color: c-fg; }
+                        TextEdit { text: ai-history; read-only: true; wrap: word-wrap; vertical-stretch: 1; placeholder-text: "在下方輸入需求，開始與 AI 對話。"; }
+                        Text { text: "指令"; color: c-fg; }
+                        TextEdit { text <=> ai-prompt; height: 75px; wrap: word-wrap; placeholder-text: "例如：整理目前文章或建立 JSON"; }
+                        CheckBox { text: "傳送目前文件內容"; checked <=> ai-include-document; }
+                        Text { text: "文件與先前對話會傳送至 OpenRouter。"; color: c-gutter-fg; wrap: word-wrap; }
+                        HorizontalLayout { spacing: 6px;
+                            Button { text: "送出"; enabled: !ai-running; clicked => { ai-send(); } }
+                            Button { text: "清除對話"; enabled: !ai-running; clicked => { ai-history = ""; ai-result = ""; ai-status = "已清除對話"; ai-has-source = false; } }
+                        }
+                        Text { text: ai-status; color: c-fg; wrap: word-wrap; }
+                    }
+                    if ai-page == 1: VerticalLayout { padding: 8px; spacing: 6px;
+                        Text { text: "回覆預覽（可自行修改）"; color: c-fg; }
+                        TextEdit { text <=> ai-result; font-family: root.mono; vertical-stretch: 1; }
+                        HorizontalLayout { spacing: 6px;
+                            Button { text: "套用至目前文件"; enabled: !ai-running && !ai-result.is-empty; clicked => { ai-apply(false); } }
+                            Button { text: "建立新文件"; enabled: !ai-running && !ai-result.is-empty; clicked => { ai-apply(true); } }
+                        }
+                        Text { text: ai-status; color: c-fg; wrap: word-wrap; }
+                    }
+                    if ai-page == 2: VerticalLayout { padding: 8px; spacing: 8px; alignment: start;
+                        Text { text: "OpenRouter API 金鑰（僅保留於本次執行）"; color: c-fg; wrap: word-wrap; }
+                        LineEdit { text <=> ai-key; input-type: password; placeholder-text: "OpenRouter API key"; }
+                        Text { text: "免費模型"; color: c-fg; }
+                        LineEdit { text <=> ai-model; placeholder-text: "openrouter/free 或模型名稱:free"; }
+                        Text { text: "僅支援 openrouter/free 或以 :free 結尾的模型。"; color: c-gutter-fg; wrap: word-wrap; }
+                    }
+                }
             }
             if show-preview: Rectangle { width: 1px; background: #aaa; }
             if show-preview: Rectangle { horizontal-stretch: 1; background: #fbfbfb;
@@ -595,37 +654,6 @@ export component AppWindow inherits Window {
             Text { text: "以 Rust + Slint 製作的類 Notepad++ 文字編輯器"; }
             Text { text: "支援 HTML / Markdown 預覽"; }
             Button { text: "確定"; clicked => { about-visible = false; } }
-        }
-    }
-
-    if ai-visible: Dialog {
-        title: "AI 文件助手 — OpenRouter 免費模型";
-        x: max(0px, (parent.width - self.width) / 2); y: 35px;
-        width: min(760px, parent.width); height: min(620px, parent.height - 40px);
-        close => { ai-visible = false; }
-        VerticalLayout { padding: 10px; spacing: 6px;
-            Text { text: "API 金鑰（僅保留於本次執行）："; }
-            LineEdit { text <=> ai-key; input-type: password; placeholder-text: "OpenRouter API key"; }
-            HorizontalLayout { spacing: 8px;
-                Text { text: "免費模型："; vertical-alignment: center; }
-                LineEdit { text <=> ai-model; placeholder-text: "openrouter/free 或模型名稱:free"; }
-            }
-            CheckBox { text: "傳送目前文件內容供 AI 編輯（內容會傳送至 OpenRouter）"; checked <=> ai-include-document; }
-            Text { text: "每次請求也會傳送先前對話及回覆；可按「清除對話」。"; }
-            Text { text: "指令："; }
-            TextEdit { text <=> ai-prompt; height: 75px; placeholder-text: "例如：建立一份 JSON 設定檔，或修改目前 Markdown 文件"; }
-            HorizontalLayout { spacing: 8px;
-                Button { text: "送出"; enabled: !ai-running; clicked => { ai-send(); } }
-                Button { text: "清除對話"; enabled: !ai-running; clicked => { ai-history = ""; ai-result = ""; ai-status = "已清除對話"; ai-has-source = false; } }
-                Text { text: ai-status; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-            }
-            Text { text: "回覆預覽（可自行修改後套用）："; }
-            TextEdit { text <=> ai-result; font-family: root.mono; vertical-stretch: 1; }
-            HorizontalLayout { spacing: 8px;
-                Button { text: "套用至目前文件"; enabled: !ai-running && !ai-result.is-empty; clicked => { ai-apply(false); } }
-                Button { text: "建立新文件"; enabled: !ai-running && !ai-result.is-empty; clicked => { ai-apply(true); } }
-                Button { text: "關閉"; clicked => { ai-visible = false; } }
-            }
         }
     }
 
