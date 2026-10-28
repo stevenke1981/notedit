@@ -185,6 +185,8 @@ export component AppWindow inherits Window {
     in-out property <bool> ai-visible: false;
     in-out property <int> ai-page: 0;
     in-out property <int> ai-role: 0;
+    in-out property <int> ai-language: 0;
+    in-out property <string> ai-language-custom;
     in-out property <int> ai-mode: 0;
     in-out property <string> ai-key;
     in-out property <string> ai-key-status;
@@ -433,6 +435,11 @@ export component AppWindow inherits Window {
                             Text { text: "角色"; color: c-fg; vertical-alignment: center; }
                             ComboBox { model: ["通用助手", "校稿", "翻譯", "文字潤飾", "摘要", "格式整理"]; current-index <=> ai-role; }
                         }
+                        if ai-role == 2: HorizontalLayout { spacing: 6px;
+                            Text { text: "翻譯語言"; color: c-fg; vertical-alignment: center; }
+                            ComboBox { model: ["繁體中文（台灣）", "簡體中文", "英文", "日文", "韓文", "越南文", "泰文", "印尼文", "法文", "德文", "西班牙文", "自訂語言"]; current-index <=> ai-language; }
+                        }
+                        if ai-role == 2 && ai-language == 11: LineEdit { text <=> ai-language-custom; placeholder-text: "輸入目標語言，例如葡萄牙文"; }
                         Text { text: "對話紀錄"; color: c-fg; }
                         TextEdit { text: ai-history; read-only: true; wrap: word-wrap; vertical-stretch: 1; placeholder-text: "在下方輸入需求，開始與 AI 對話。"; }
                         Text { text: "指令"; color: c-fg; }

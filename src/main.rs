@@ -2804,7 +2804,17 @@ fn main() -> Result<(), slint::PlatformError> {
         let model = ui.get_ai_model().trim().to_string();
         let prompt = ui.get_ai_prompt().to_string();
         let (role, role_name) = match ui.get_ai_role() {
-            1 => (agent::Role::Proofread, "校稿"), 2 => (agent::Role::Translate, "翻譯"),
+            1 => (agent::Role::Proofread, "校稿"),
+            2 => {
+                let language = match ui.get_ai_language() {
+                    0 => "繁體中文（台灣）".to_string(), 1 => "簡體中文".into(), 2 => "英文".into(), 3 => "日文".into(),
+                    4 => "韓文".into(), 5 => "越南文".into(), 6 => "泰文".into(), 7 => "印尼文".into(),
+                    8 => "法文".into(), 9 => "德文".into(), 10 => "西班牙文".into(),
+                    _ => ui.get_ai_language_custom().trim().to_string(),
+                };
+                if language.is_empty() { ui.set_ai_status("請輸入自訂翻譯語言".into()); return; }
+                (agent::Role::Translate(language), "翻譯")
+            }
             3 => (agent::Role::Polish, "文字潤飾"), 4 => (agent::Role::Summarize, "摘要"),
             5 => (agent::Role::Format, "格式整理"), _ => (agent::Role::General, "通用助手"),
         };
