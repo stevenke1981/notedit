@@ -92,6 +92,6 @@ mod tests {
         let back: Settings = serde_json::from_str(&j).unwrap();
         assert_eq!(back.recent, s.recent);
         let partial: Settings = serde_json::from_str("{\"dark\":true}").unwrap();
-        assert!(partial.dark && partial.font == 14.0 && partial.font_family == "JetBrains Mono");
+        assert!(partial.dark && partial.font == 15.0 && partial.line_spacing == 1.4 && partial.tab_width == 4 && !partial.ligatures && partial.font_family == "JetBrains Mono");
     }
 }
