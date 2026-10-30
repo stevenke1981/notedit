@@ -6,7 +6,10 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
-pub const TAB: usize = 4;
+static TAB_W: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(4);
+/// Current tab width in cells.
+pub fn tab() -> usize { TAB_W.load(std::sync::atomic::Ordering::Relaxed) }
+pub fn set_tab(n: usize) { TAB_W.store(n.clamp(1, 16), std::sync::atomic::Ordering::Relaxed); }
 
 /// A selection in char offsets. `anchor == head` is a plain caret.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -200,7 +203,7 @@ pub fn line_string(rope: &Rope, line: usize) -> String {
 }
 
 pub fn char_cells(c: char, col: usize) -> usize {
-    if c == '\t' { TAB - col % TAB } else { UnicodeWidthChar::width(c).unwrap_or(1) }
+    if c == '\t' { let t = tab(); t - col % t } else { UnicodeWidthChar::width(c).unwrap_or(1) }
 }
 
 /// Cells taken by chars[from..to] when the row starts at `from0`.
@@ -308,7 +311,7 @@ impl Layout {
 fn indent_of(s: &str) -> Option<usize> {
     if s.trim().is_empty() { return None; }
     let mut n = 0;
-    for c in s.chars() { match c { ' ' => n += 1, '\t' => n += TAB, _ => break } }
+    for c in s.chars() { match c { ' ' => n += 1, '\t' => n += tab(), _ => break } }
     Some(n)
 }
 

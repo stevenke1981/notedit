@@ -35,11 +35,17 @@ pub struct Settings {
     pub theme_dark: BTreeMap<String, String>,
     /// action → shortcut, e.g. {"wordcount": "Ctrl+Shift+W", "compare": "Alt+F5"}
     pub keys: BTreeMap<String, String>,
+    /// row height as a multiple of the font size (1.0–2.5)
+    pub line_spacing: f32,
+    /// columns per tab stop (1–16)
+    pub tab_width: usize,
+    /// draw programming ligatures (e.g. `->` as an arrow); off keeps every character in its own cell
+    pub ligatures: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: 14.0, font_family: "JetBrains Mono".into(), wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
+        Settings { font: 15.0, line_spacing: 1.4, tab_width: 4, ligatures: false, font_family: "JetBrains Mono".into(), wrap: false, line_numbers: true, dark: false, preview: false, restore_session: true,
                    recent: vec![], session: vec![], session_cur: 0, macro_keys: vec![], docmap: false, autocomplete: true, spell: false, spell_ignore: vec![], typewriter: false,
                    sidebar: 0, workspace: None, workspace_expanded: vec![], theme_light: BTreeMap::new(), theme_dark: BTreeMap::new(), keys: BTreeMap::new() }
     }

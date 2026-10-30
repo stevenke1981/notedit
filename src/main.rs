@@ -341,6 +341,9 @@ fn build_menus(st: &State) -> Vec<Menu> {
 }
 
 /// Width of a tab button (kept in Rust so drop targets can be computed exactly).
+/// Characters fonts like JetBrains Mono / Fira Code combine into ligatures.
+fn is_lig_char(c: char) -> bool { matches!(c, '-' | '=' | '<' | '>' | '!' | '|' | '&' | ':' | '+' | '*' | '/' | '~' | '.' | '#' | '?' | '%' | '^' | '_' | '$' | '\\' | '[' | ']' | '{' | '}' | ';') }
+
 fn tab_width(title: &str, bold: bool) -> f32 {
     let w: f32 = title.chars().map(|c| if unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) == 2 { 13.0 } else { 7.4 }).sum();
     let w = if bold { w * 1.08 } else { w };
@@ -504,6 +507,7 @@ impl App {
         ui.set_docmap(st.docmap);
         ui.set_active_view(st.view_idx() as i32);
         ui.set_editor_font_size(st.font);
+        ui.set_line_spacing(st.cfg.line_spacing.clamp(1.0, 2.5));
         ui.set_show_preview(st.preview && matches!(d.lang.as_str(), "markdown" | "html" | "xml"));
         ui.set_overwrite(st.overwrite);
         ui.set_dark(st.dark);
@@ -1185,7 +1189,7 @@ impl App {
             "wrap" => { { let mut st = self.st.borrow_mut(); st.wrap = !st.wrap; } self.refresh_meta(); }
             "linenumbers" => { { let mut st = self.st.borrow_mut(); st.line_numbers = !st.line_numbers; } self.refresh_meta(); }
             "preview" => { { let mut st = self.st.borrow_mut(); st.preview = !st.preview; } self.refresh_meta(); self.refresh_preview(); }
-            "zoomreset" => { { let mut st = self.st.borrow_mut(); st.font = 14.0; } self.refresh_meta(); }
+            "zoomreset" => { { let mut st = self.st.borrow_mut(); st.font = settings::Settings::default().font; } self.refresh_meta(); }
             "toggleovr" => { { let mut st = self.st.borrow_mut(); st.overwrite = !st.overwrite; } self.refresh_meta(); }
             "stats" => { self.mad_action("wordcount"); }
             "datetime" => {
@@ -2032,7 +2036,7 @@ impl App {
                 let ls = r.line_to_char(l);
                 if outdent {
                     let chars = line_chars(r, l);
-                    let n = if chars.first() == Some(&'\t') { 1 } else { chars.iter().take(editor::TAB).take_while(|c| **c == ' ').count() };
+                    let n = if chars.first() == Some(&'\t') { 1 } else { chars.iter().take(editor::tab()).take_while(|c| **c == ' ').count() };
                     if n > 0 { edits.push((ls, ls + n, String::new())); }
                 } else if editor::line_len(r, l) > 0 || lines.len() == 1 {
                     edits.push((ls, ls, "\t".to_string()));
@@ -2227,6 +2231,8 @@ impl App {
         let w = ui.as_weak();
         self.idle.start(slint::TimerMode::SingleShot, Duration::from_secs(10), move || { if let Some(u) = w.upgrade() { u.set_caret_idle(true); } });
         let (cw, lh) = self.metrics();
+        let cjk_w = self.ui().get_cjk_w().max(1.0);
+        let ligatures = self.st.borrow().cfg.ligatures;
         let (w, h) = self.view_size(vi);
         if w <= 1.0 || h <= 1.0 { self.mark_dirty(); }
         self.ensure_layout(vi);
@@ -2321,7 +2327,13 @@ impl App {
             let mut run_style = (fg, false, false);
             let flush = |run: &mut String, start: usize, style: (slint::Color, bool, bool), toks: &mut Vec<EdTok>| {
                 if run.is_empty() { return; }
-                let x = px(start);
+                let mut x = px(start);
+                // a wide (CJK) glyph is narrower than its 2 cells: centre it instead of leaving
+                // all the slack on the right, so 中文 looks evenly spaced and stays on the grid
+                let mut it = run.chars();
+                if let (Some(c), None) = (it.next(), it.next()) {
+                    if unicode_width::UnicodeWidthChar::width(c) == Some(2) { x += ((2.0 * cw - cjk_w) / 2.0).max(0.0).round(); }
+                }
                 let wpx = run.chars().count() as f32 * cw;
                 if x + wpx >= -cw && x <= w + cw && !run.trim().is_empty() {
                     toks.push(EdTok { x, text: run.as_str().into(), color: style.0, bold: style.1, italic: style.2 });
@@ -2333,7 +2345,10 @@ impl App {
                 let style = spans.get(si).filter(|s| s.0 <= off && off < s.1).map(|s| (s.2, s.3, s.4)).unwrap_or((fg, false, false));
                 let c = chars[off];
                 let cwid = xs[off + 1 - row.start] - xs[off - row.start];
-                if c == '\t' || cwid != 1 || style != run_style || c.is_control() {
+                // without ligatures, break between adjacent operator characters so the
+                // font cannot merge e.g. `->` / `!=` / `>=` into one glyph
+                let lig_break = !ligatures && is_lig_char(c) && run.chars().last().is_some_and(is_lig_char);
+                if c == '\t' || cwid != 1 || style != run_style || c.is_control() || lig_break {
                     flush(&mut run, run_start, run_style, &mut toks);
                     run_style = style;
                     run_start = off;
@@ -2722,6 +2737,7 @@ fn main() -> Result<(), slint::PlatformError> {
         side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
         side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
+    editor::set_tab(st.cfg.tab_width);
     let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ticker: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
