@@ -4,9 +4,46 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(any(not(windows), test))]
 fn dict() -> Option<&'static spellbook::Dictionary> {
     static D: OnceLock<Option<spellbook::Dictionary>> = OnceLock::new();
     D.get_or_init(|| spellbook::Dictionary::new(include_str!("../assets/dict/en_US.aff"), include_str!("../assets/dict/en_US.dic")).ok()).as_ref()
+}
+
+#[cfg(all(windows, not(test)))]
+struct Plugin {
+    _library: libloading::Library,
+    check: unsafe extern "C" fn(*const u8, usize) -> bool,
+    suggest: unsafe extern "C" fn(*const u8, usize, *mut u8, usize) -> usize,
+}
+
+#[cfg(all(windows, not(test)))]
+fn plugin() -> Result<&'static Plugin, String> {
+    static PLUGIN: OnceLock<Plugin> = OnceLock::new();
+    if let Some(plugin) = PLUGIN.get() { return Ok(plugin); }
+    let loaded = (|| -> Result<Plugin, String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let path = exe.with_file_name("notedit_spell.dll");
+        // The module is loaded only from the directory containing this executable.
+        let library = unsafe { libloading::Library::new(&path) }.map_err(|e| format!("{}：{e}", path.display()))?;
+        unsafe {
+            let version: unsafe extern "C" fn() -> u32 = *library.get(b"notedit_spell_version\0").map_err(|e| e.to_string())?;
+            let ready: unsafe extern "C" fn() -> bool = *library.get(b"notedit_spell_ready\0").map_err(|e| e.to_string())?;
+            if version() != 1 || !ready() { return Err("拼字模組版本不符或字典載入失敗".into()); }
+            let check = *library.get(b"notedit_spell_check\0").map_err(|e| e.to_string())?;
+            let suggest = *library.get(b"notedit_spell_suggest\0").map_err(|e| e.to_string())?;
+            Ok(Plugin { _library: library, check, suggest })
+        }
+    })()?;
+    let _ = PLUGIN.set(loaded);
+    Ok(PLUGIN.get().expect("plugin was initialized"))
+}
+
+pub fn available() -> Result<(), String> {
+    #[cfg(all(windows, not(test)))]
+    { plugin().map(|_| ()) }
+    #[cfg(any(not(windows), test))]
+    { dict().map(|_| ()).ok_or_else(|| "拼字字典載入失敗".to_string()) }
 }
 
 fn ignored() -> &'static Mutex<HashSet<String>> {
@@ -22,14 +59,28 @@ pub fn check(word: &str) -> bool {
     // camelCase / ALLCAPS identifiers are not prose
     if word.chars().skip(1).any(|c| c.is_ascii_uppercase()) { return true; }
     if ignored().lock().map(|s| s.contains(word)).unwrap_or(false) { return true; }
-    dict().map(|d| d.check(word)).unwrap_or(true)
+    #[cfg(all(windows, not(test)))]
+    { plugin().map(|p| unsafe { (p.check)(word.as_ptr(), word.len()) }).unwrap_or(true) }
+    #[cfg(any(not(windows), test))]
+    { dict().map(|d| d.check(word)).unwrap_or(true) }
 }
 
 pub fn suggest(word: &str) -> Vec<String> {
+    #[cfg(all(windows, not(test)))]
+    {
+        let Ok(p) = plugin() else { return vec![] };
+        let mut bytes = vec![0; 8192];
+        let len = unsafe { (p.suggest)(word.as_ptr(), word.len(), bytes.as_mut_ptr(), bytes.len()) };
+        if len > bytes.len() { return vec![]; }
+        return std::str::from_utf8(&bytes[..len]).map(|s| s.lines().map(str::to_string).collect()).unwrap_or_default();
+    }
+    #[cfg(any(not(windows), test))]
+    {
     let mut out = Vec::new();
     if let Some(d) = dict() { d.suggest(word, &mut out); }
     out.truncate(6);
     out
+    }
 }
 
 /// Misspelled words in `chars` as char ranges.

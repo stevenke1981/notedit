@@ -124,7 +124,11 @@ impl App {
             "xf:jsonmin" => self.try_transform(|s| fmt::json(s, None)),
             "xf:xmlfmt" => self.try_transform(|s| fmt::xml(s, Some(4))),
             "xf:xmlmin" => self.try_transform(|s| fmt::xml(s, None)),
-            "spell" => { { let mut st = self.st.borrow_mut(); st.cfg.spell = !st.cfg.spell; } self.persist(); self.refresh_meta(); self.render_all(); }
+            "spell" => {
+                if !self.st.borrow().cfg.spell { if let Err(e) = spell::available() { msg(&format!("無法啟用拼字檢查：{e}")); return true; } }
+                { let mut st = self.st.borrow_mut(); st.cfg.spell = !st.cfg.spell; }
+                self.persist(); self.refresh_meta(); self.render_all();
+            }
             "fif" => {
                 if ui.get_fif_dir().is_empty() {
                     let dir = { let st = self.st.borrow(); st.docs[self.cd()].path.as_ref().and_then(|p| p.parent()).map(|p| p.display().to_string()) }

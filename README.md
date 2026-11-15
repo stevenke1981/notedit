@@ -6,7 +6,7 @@
 
 請至 **[Releases 頁面](https://github.com/stevenke1981/notedit/releases/latest)** 下載最新版本：
 
-- Windows：`notedit-windows-x64.zip`（解壓後執行 `notedit.exe`）
+- Windows：`NotEdit-<版本>-windows-x64-setup.exe` 安裝程式，或 `notedit-windows-x64.zip` 免安裝版（完整解壓後執行 `notedit.exe`；`notedit_spell.dll` 須與執行檔放在同一資料夾，供英文拼字檢查使用）
 - Linux：`notedit-linux-x64.tar.gz`
 - macOS (Apple Silicon)：`notedit-macos-arm64.tar.gz`
 
@@ -40,6 +40,8 @@
 - **macOS**：尚不支援 Finder 右鍵選單（需要 .app 套件與 Finder 擴充功能），請用「打開檔案的應用程式」或把檔案拖進視窗
 - **單一執行個體**：NotEdit 已在執行時，再次開啟的檔案（包含檔案總管多選後一次開啟多個）會送到既有視窗開成新分頁並把視窗帶到前景；資料夾參數會開成工作區。使用 `--new-instance` 可強制開新視窗。轉送只走本機 127.0.0.1，並以隨機權杖驗證
 - 命令列可一次傳入多個檔案與資料夾：`notedit a.txt b.rs 專案資料夾`
+- Windows 安裝程式預設替目前使用者加入檔案與資料夾右鍵選單，可在安裝時取消勾選；解除安裝會移除安裝程式建立的選單。Windows 11 請在右鍵選單中選「顯示其他選項」。安裝不需要系統管理員權限。
+- 建立 Windows 安裝程式：安裝 Rust、MSVC C++ Redistributable 和 Inno Setup 6 或 7，執行 `powershell -File scripts/package-windows.ps1`；成品在 `target/release/installer/`。安裝程式隨附應用程式所需的 VC 執行階段 DLL；應定期重新打包以更新該 DLL。
 
 ### v0.6.0
 
@@ -94,7 +96,7 @@
 - **轉換選單**：繁體 ↔ 簡體（OpenCC 詞彙轉換，如「軟體 ↔ 软件」）、全形 ↔ 半形、Tab ↔ 空白、字首大寫、大小寫互換、移除行首（及行尾）空白、合併行、刪除空行（含只有空白的行）、遞減排序、移除重複行、插入遞增數字、欄位對齊、複製為十六進位字串 / 還原十六進位字串（接受 `4D6F64`、`4D 6F 64`、`%4D%6F%64`、`4D,6F,64`）；有選取時只轉換選取範圍
 - **字數統計**（工具 → 字數統計）：中日韓文字每字計一個字，另列字元、空白、中日韓、半形 / 全形、行數、位元組
 - **在檔案中尋找**（搜尋 → 在檔案中尋找，Ctrl+Shift+F）：資料夾、檔案類型篩選（`*.rs;*.md`）、包含子資料夾、規則運算式 / 大小寫 / 全字；背景執行可停止，結果即時加入結果面板，點擊即開啟檔案並跳至該處（略過 .git、target、node_modules 與二進位檔）
-- **拼字檢查**（檢視 → 拼字檢查）：內建 en_US Hunspell 字典（spellbook），純文字 / Markdown 中錯字加紅色底線，右鍵選單提供建議字與「忽略」（忽略清單會保存）
+- **拼字檢查**（檢視 → 拼字檢查）：使用 en_US Hunspell 字典（spellbook），純文字 / Markdown 中錯字加紅色底線，右鍵選單提供建議字與「忽略」（忽略清單會保存）。Windows 的字典和引擎位於 `notedit_spell.dll`；缺少或版本不符時會提示，其他編輯功能仍可使用。
 
 ### 既有功能
 
@@ -136,6 +138,8 @@
 cargo build --release
 ./target/release/notedit [檔案...]
 ```
+
+Windows 編譯會在 `target/release/` 同時產生 `notedit.exe` 及 `notedit_spell.dll`。複製或發布時請保留兩者在同一資料夾，並附上字典與字型授權檔；Linux 和 macOS 仍使用編入主程式的拼字引擎。
 
 Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`。
 

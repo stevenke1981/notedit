@@ -59,18 +59,21 @@ jobs:
         run: |
           '{"restore_session":false}' | Set-Content "$env:RUNNER_TEMP\cfg.json"
           $env:NOTEDIT_CONFIG = "$env:RUNNER_TEMP\cfg.json"
+          $env:NOTEDIT_SPELL_SMOKE = "1"
           $p = Start-Process -FilePath target\release\notedit.exe -ArgumentList "--smoke-test","$env:RUNNER_TEMP\smoke.txt","src\workspace.rs" -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "smoke test timed out" }
           Get-Content "$env:RUNNER_TEMP\smoke.txt"
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern NOTEDIT_SMOKE_OK -Quiet)) { throw "smoke test failed" }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern SPELL_MODULE_OK -Quiet)) { throw "spell module test failed" }
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $d = "${{ matrix.name }}"
           New-Item -ItemType Directory $d | Out-Null
-          Copy-Item target/release/${{ matrix.bin }}, README.md, LICENSE, ui/fonts/LICENSE-DejaVu.txt, ui/fonts/LICENSE-JetBrainsMono-OFL.txt $d
+          Copy-Item target/release/${{ matrix.bin }}, target/release/notedit_spell.dll, README.md, LICENSE, assets/dict/LICENSE-en_US.txt, ui/fonts/LICENSE-DejaVu.txt, ui/fonts/LICENSE-JetBrainsMono-OFL.txt $d
           Compress-Archive -Path $d -DestinationPath "$d.zip"
+          ./scripts/package-windows.ps1 -SkipBuild
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -85,6 +88,7 @@ jobs:
           path: |
             ${{ matrix.name }}.zip
             ${{ matrix.name }}.tar.gz
+            target/release/installer/*.exe
           if-no-files-found: error
 
   release:

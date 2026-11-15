@@ -3216,6 +3216,7 @@ dependencies = [
  "ferrous-opencc",
  "fontdb 0.22.0",
  "i-slint-backend-winit",
+ "libloading",
  "memmap2",
  "pulldown-cmark 0.12.2",
  "raw-window-handle",
@@ -3235,6 +3236,13 @@ dependencies = [
  "winit",
  "winreg",
  "winresource",
+]
+
+[[package]]
+name = "notedit-spell"
+version = "0.7.0"
+dependencies = [
+ "spellbook",
 ]
 
 [[package]]
