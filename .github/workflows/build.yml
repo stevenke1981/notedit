@@ -34,13 +34,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgtk-3-dev xvfb
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev xvfb
       - name: Test
         run: cargo test --release --locked
       - name: Build
         run: cargo build --release --locked
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
+        env:
+          ACME_RENDER_BACKEND: cpu
         run: |
           echo '{"restore_session":false}' > "$RUNNER_TEMP/cfg.json"
           NOTEDIT_CONFIG="$RUNNER_TEMP/cfg.json" timeout 60 xvfb-run -a target/release/notedit --smoke-test "$RUNNER_TEMP/smoke.txt" src/workspace.rs
@@ -48,6 +50,8 @@ jobs:
       - name: Smoke test (macOS)
         if: runner.os == 'macOS'
         continue-on-error: true
+        env:
+          ACME_RENDER_BACKEND: cpu
         run: |
           echo '{"restore_session":false}' > "$RUNNER_TEMP/cfg.json"
           NOTEDIT_CONFIG="$RUNNER_TEMP/cfg.json" target/release/notedit --smoke-test "$RUNNER_TEMP/smoke.txt" src/workspace.rs &
@@ -56,6 +60,8 @@ jobs:
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          ACME_RENDER_BACKEND: cpu
         run: |
           '{"restore_session":false}' | Set-Content "$env:RUNNER_TEMP\cfg.json"
           $env:NOTEDIT_CONFIG = "$env:RUNNER_TEMP\cfg.json"

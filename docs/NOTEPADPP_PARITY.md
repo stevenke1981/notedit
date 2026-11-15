@@ -3,18 +3,18 @@
 Baseline date: 2026-10-17  
 Reference target: Notepad++ 8.9.8.1 (2026-09-24) and the current Notepad++ User Manual.
 
-NotEdit is intentionally cross-platform and Rust + Slint based. "Parity" therefore means equivalent user capability and reliability, not a pixel-for-pixel clone or compatibility with Notepad++'s Win32/Scintilla internals.
+NotEdit is intentionally cross-platform and Rust + AcmeUI-Native based. "Parity" therefore means equivalent user capability and reliability, not a pixel-for-pixel clone or compatibility with Notepad++'s Win32/Scintilla internals.
 
 ## Source organization
 
-The division follows the responsibilities visible in [Notepad++'s PowerEditor source](https://github.com/notepad-plus-plus/notepad-plus-plus/tree/master/PowerEditor/src): application startup and commands, editor behavior, and separate supporting components. NotEdit keeps its own Rust and Slint implementation:
+The division follows the responsibilities visible in [Notepad++'s PowerEditor source](https://github.com/notepad-plus-plus/notepad-plus-plus/tree/master/PowerEditor/src): application startup and commands, editor behavior, and separate supporting components. NotEdit keeps its own Rust and AcmeUI-Native implementation:
 
 | Responsibility | NotEdit source |
 |---|---|
 | Startup, shared application state, callbacks | `src/main.rs` |
 | Documents, file operations, sessions and recovery | `src/app_actions.rs`, `src/file_io.rs`, `src/recovery.rs` |
 | Search and application commands | `src/app_commands.rs`, `src/search.rs`, `src/fif.rs` |
-| Editor interaction and rendering | `src/editor_actions.rs`, `src/editor_render.rs`, `src/editor.rs`, `ui/editor.slint` |
+| Editor interaction and rendering | `src/editor_actions.rs`, `src/editor_render.rs`, `src/editor.rs` |
 | Highlighting, panels, workspace and settings | `src/highlight.rs`, `src/panels.rs`, `src/workspace.rs`, `src/settings.rs` |
 
 The application action modules extend the same `App` and share its state; they are source modules, not a Notepad++ plugin ABI or independently loadable binaries.
@@ -134,7 +134,7 @@ These features deliver the highest everyday value without requiring a new text r
 5. Code folding.
 6. Document Map.
 
-**Architecture gate:** true multi-caret, column mode, folding, and synchronized split views must not be simulated with brittle string rewrites. If Slint's TextInput API cannot expose the required primitives, introduce an `EditorCore` document model and a custom editor surface (or a proven editor backend) before implementing these features.
+**Architecture gate:** true multi-caret, column mode, folding, and synchronized split views must not be simulated with brittle string rewrites. If the UI toolkit's text input API cannot expose the required primitives, introduce an `EditorCore` document model and a custom editor surface (or a proven editor backend) before implementing these features.
 
 ### Phase D — Extensibility (v0.5+)
 
@@ -165,7 +165,7 @@ For every PR:
 - no data-loss regression when save fails midway
 - UI smoke test checklist for tabs, find/replace, session restore and close-with-unsaved-changes
 
-For editor-core features (Phase C), add deterministic unit tests independent of Slint rendering so selection, caret, folding and undo behavior can be tested headlessly.
+For editor-core features (Phase C), add deterministic unit tests independent of UI rendering so selection, caret, folding and undo behavior can be tested headlessly.
 
 ## Reference sources
 

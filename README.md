@@ -151,7 +151,7 @@ cargo build --release
 
 Windows 編譯會在 `target/release/` 同時產生 `notedit.exe` 及 `notedit_spell.dll`。複製或發布時請保留兩者在同一資料夾，並附上字典與字型授權檔；Linux 和 macOS 仍使用編入主程式的拼字引擎。
 
-Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`。
+Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev`（與 CI 相同；GTK 供檔案對話框使用）。
 
 推送 `v*` 標籤時，GitHub Actions 會自動建置 Windows / Linux / macOS 並發佈到 Releases。
 
@@ -171,7 +171,14 @@ NotEdit 會以目前 Notepad++ 的實際能力作為功能對照，而不是只�
 - XML 格式化為輕量實作，不驗證 DTD / 命名空間
 - 編輯器以等寬字格排版；比例字型或連字（ligature）不會依實際寬度顯示
 - 列印透過瀏覽器的列印功能；預覽為簡化版（不支援 CSS、圖片）
-- 介面改用 AcmeUI-Native 後：不再內嵌 JetBrains Mono / DejaVu 字型（只能使用系統字型）；字型缺少粗體 / 斜體字面時改以一般字面顯示；AI 助手的對話紀錄與回覆為唯讀，指令為單行輸入（Enter 送出）；工具列改用文字符號；彈出選單以細邊與淺陰影代替模糊陰影
+
+### 已知差異（AcmeUI 移植後）
+
+- 不再載入內嵌的 JetBrains Mono / DejaVu 字型，編輯區使用系統等寬字型；字型缺少粗體 / 斜體字面時改以一般字面顯示
+- 工具列改用文字符號，不再使用 SVG 圖示
+- AI 助手的指令欄為單行輸入（Enter 送出）；回覆在套用前為唯讀，無法先在預覽中修改
+- 對話框在深色模式下仍維持淺色外觀
+- 彈出選單以細邊與淺陰影代替模糊陰影
 
 ## AI 文件助手
 
