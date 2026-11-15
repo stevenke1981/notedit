@@ -28,6 +28,7 @@ mod render_model;
 mod agent;
 mod credentials;
 mod ai_files;
+mod ui;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 
@@ -602,6 +603,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let cwd = std::env::current_dir().unwrap_or_default();
         let abs: Vec<PathBuf> = args.iter().map(|a| { let p = PathBuf::from(a); if p.is_absolute() { p } else { cwd.join(p) } }).collect();
         if shell::forward(&abs) { return Ok(()); }
+    }
+
+    if let Some(i) = args.iter().position(|a| a == "--acme-spike") {
+        let report = args.get(i + 1).map(PathBuf::from);
+        let family = detect_fonts().into_iter().find(|f| !BUNDLED_FONTS.contains(&f.as_str())).unwrap_or_else(|| "monospace".into());
+        ui::shell::run_spike(family, report);
+        return Ok(());
     }
 
     let ui = AppWindow::new()?;
