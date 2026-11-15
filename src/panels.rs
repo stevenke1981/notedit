@@ -4,9 +4,9 @@ use super::*;
 
 /// Built-in palettes (light, dark); user overrides from settings.json win.
 const THEME_KEYS: &[(&str, &str, &str)] = &[
-    ("editor-bg", "#ffffff", "#1e1e1e"), ("fg", "#1e1e1e", "#dcdcdc"),
-    ("gutter", "#e4e4e4", "#2d2d30"), ("gutter-fg", "#808080", "#858585"),
-    ("curline", "#e8f2fe", "#2a2d3e"), ("sel", "#c0d8f0", "#264f78"),
+    ("editor-bg", "#ffffff", "#1e1e1e"), ("fg", "#24292f", "#d4d4d4"),
+    ("gutter", "#f6f8fa", "#1e1e1e"), ("gutter-fg", "#6e7781", "#858585"),
+    ("curline", "#eef4fc", "#2a2d2e"), ("sel", "#b6d7ff", "#264f78"),
     ("mark", "#b4f0b4", "#3a5a3a"), ("bracket", "#ffd97a", "#5a4a20"),
     ("chrome", "#f0f0f0", "#2b2b2b"), ("menu", "#f5f6f7", "#252526"),
     ("tabbar", "#e8e8e8", "#333337"), ("tab", "#dcdcdc", "#3c3c3c"), ("tab-active", "#ffffff", "#1e1e1e"),

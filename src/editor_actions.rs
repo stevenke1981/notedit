@@ -789,7 +789,7 @@ impl App {
                 let ls = r.line_to_char(l);
                 if outdent {
                     let chars = line_chars(r, l);
-                    let n = if chars.first() == Some(&'\t') { 1 } else { chars.iter().take(editor::TAB).take_while(|c| **c == ' ').count() };
+                    let n = if chars.first() == Some(&'\t') { 1 } else { chars.iter().take(editor::tab()).take_while(|c| **c == ' ').count() };
                     if n > 0 { edits.push((ls, ls + n, String::new())); }
                 } else if editor::line_len(r, l) > 0 || lines.len() == 1 {
                     edits.push((ls, ls, if json { "    " } else { "\t" }.to_string()));

@@ -146,6 +146,7 @@ impl App {
         ui.set_docmap(st.docmap);
         ui.set_active_view(st.view_idx() as i32);
         ui.set_editor_font_size(st.font);
+        ui.set_line_spacing(st.cfg.line_spacing.clamp(1.0, 2.5));
         ui.set_show_preview(st.preview && matches!(d.lang.as_str(), "markdown" | "html" | "xml"));
         ui.set_overwrite(st.overwrite);
         ui.set_dark(st.dark);

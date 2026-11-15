@@ -34,6 +34,7 @@ export component EditorView inherits Rectangle {
         if (caret-idle && ime.has-focus && ime.preedit-text == "") { idle-fs.focus(); } else if (!caret-idle && idle-fs.has-focus) { ime.focus(); }
     }
     in property <length> line-h: 18px;
+    in property <length> text-dy: 0px;
     in property <length> cell-w: 8px;
     in property <length> font-size: 14px;
     in property <string> mono;
@@ -80,7 +81,7 @@ export component EditorView inherits Rectangle {
                     for r[i] in st.rows: Rectangle {
                         y: i * line-h; height: line-h;
                         if r.mark: Rectangle { x: 3px; y: (line-h - 10px) / 2; width: 10px; height: 10px; border-radius: 5px; background: #2a6fc9; border-width: 1px; border-color: #1a4f99; }
-                        if st.num-w > 0: Text { x: 16px; width: st.num-w; text: r.num; color: r.cur ? c-fg : c-gutter-fg; font-family: mono; font-size: font-size;
+                        if st.num-w > 0: Text { x: 16px; width: st.num-w; text: r.num; y: text-dy; color: r.cur ? c-fg : c-gutter-fg; font-family: mono; font-size: font-size;
                             horizontal-alignment: right; vertical-alignment: top; }
                         if r.fold > 0: Rectangle {
                             x: st.gutter-w - 13px; y: (line-h - 9px) / 2; width: 9px; height: 9px;
@@ -108,7 +109,7 @@ export component EditorView inherits Rectangle {
                         background: r.diff == 1 ? Theme.diff-add : r.diff == 2 ? Theme.diff-del : r.diff == 3 ? Theme.diff-chg : r.cur ? c-curline : transparent;
                         for s in r.rects: Rectangle { x: s.x; width: s.w; y: s.kind == 4 ? line-h - 2px : 0; height: s.kind == 4 ? 1.5px : line-h;
                             background: s.kind == 0 ? c-sel : s.kind == 1 ? c-mark : s.kind == 2 ? c-bracket : s.kind == 4 ? #e02020 : s.kind == 5 ? #4080ff38 : #ffa50060; }
-                        for t in r.toks: Text { x: t.x; y: 0; text: t.text; color: t.color; font-family: mono; font-size: font-size;
+                        for t in r.toks: Text { x: t.x; y: text-dy; text: t.text; color: t.color; font-family: mono; font-size: font-size;
                             font-weight: t.bold ? 700 : 400; font-italic: t.italic; vertical-alignment: top; }
                         if r.fold == 2: Rectangle { y: line-h - 1px; height: 1px; background: c-gutter-fg; }
                     }

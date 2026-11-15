@@ -2,7 +2,7 @@
 use ropey::Rope;
 use slint::Color;
 use std::sync::OnceLock;
-use syntect::highlighting::{FontStyle, HighlightIterator, HighlightState, Highlighter, Theme, ThemeSet};
+use syntect::highlighting::{FontStyle, HighlightIterator, HighlightState, Highlighter, Theme};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet};
 
 const TOML_SYNTAX: &str = include_str!("../ui/syntaxes/TOML.sublime-syntax");
@@ -18,13 +18,84 @@ pub fn syntax_set() -> &'static SyntaxSet {
 }
 pub fn theme(dark: bool) -> &'static Theme {
     static T: OnceLock<(Theme, Theme)> = OnceLock::new();
-    let t = T.get_or_init(|| {
-        let mut ts = ThemeSet::load_defaults();
-        (ts.themes.remove("InspiredGitHub").unwrap(), ts.themes.remove("base16-eighties.dark").unwrap())
-    });
+    let t = T.get_or_init(|| (build_theme(false), build_theme(true)));
     if dark { &t.1 } else { &t.0 }
 }
 
+/// Editor backgrounds the syntax colours are checked against (see panels::THEME_KEYS).
+pub const BG_LIGHT: (u8, u8, u8) = (0xff, 0xff, 0xff);
+pub const BG_DARK: (u8, u8, u8) = (0x1e, 0x1e, 0x1e);
+
+/// Scope → (light colour, dark colour, style). Light is GitHub Light, dark is One Dark;
+/// both tuned so every colour has at least 4.5:1 contrast on the editor background.
+/// style: b = bold, i = italic, u = underline.
+const PALETTE: &[(&str, &str, &str, &str)] = &[
+    ("comment, punctuation.definition.comment", "#6e7781", "#868b95", "i"),
+    ("string, string.quoted, punctuation.definition.string", "#0a3069", "#98c379", ""),
+    ("constant.character.escape, string.regexp", "#116329", "#56b6c2", ""),
+    ("constant.numeric, constant.language, constant.other, support.constant", "#0550ae", "#d19a66", ""),
+    ("keyword, storage, storage.type, storage.modifier, keyword.operator.word", "#cf222e", "#c678dd", ""),
+    ("keyword.operator", "#24292f", "#56b6c2", ""),
+    ("entity.name.function, support.function, meta.function-call variable.function, variable.function", "#8250df", "#61afef", ""),
+    ("entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, support.type, support.class, entity.other.inherited-class", "#953800", "#e5c07b", ""),
+    ("entity.name.tag, meta.tag.sgml", "#116329", "#e06c75", ""),
+    ("entity.other.attribute-name", "#0550ae", "#d19a66", ""),
+    ("meta.annotation, meta.attribute, support.function.macro, entity.name.macro, punctuation.definition.annotation", "#6639ba", "#56b6c2", ""),
+    ("variable.parameter", "#953800", "#e06c75", ""),
+    ("variable.language, variable.other.constant", "#0550ae", "#e5c07b", ""),
+    ("entity.name.namespace, entity.name.module", "#24292f", "#e5c07b", ""),
+    ("markup.heading, entity.name.section, punctuation.definition.heading", "#0550ae", "#e06c75", "b"),
+    ("markup.bold", "#24292f", "#d19a66", "b"),
+    ("markup.italic", "#24292f", "#c678dd", "i"),
+    ("markup.underline.link, markup.underline", "#0a3069", "#61afef", "u"),
+    ("markup.raw, markup.inline.raw, markup.raw.inline, markup.raw.block", "#953800", "#98c379", ""),
+    ("markup.quote", "#116329", "#868b95", "i"),
+    ("markup.list, punctuation.definition.list_item", "#953800", "#e5c07b", ""),
+    ("markup.inserted", "#116329", "#98c379", ""),
+    ("markup.deleted", "#82071e", "#e06c75", ""),
+    ("invalid", "#82071e", "#f44747", "u"),
+];
+
+fn hex(c: &str) -> syntect::highlighting::Color {
+    let v = u32::from_str_radix(c.trim_start_matches('#'), 16).unwrap_or(0);
+    syntect::highlighting::Color { r: (v >> 16) as u8, g: (v >> 8) as u8, b: v as u8, a: 0xff }
+}
+
+#[cfg(test)]
+fn lum((r, g, b): (u8, u8, u8)) -> f64 {
+    let f = |c: u8| { let c = c as f64 / 255.0; if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } };
+    0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+}
+
+#[cfg(test)]
+/// WCAG contrast ratio between two sRGB colours.
+pub fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+fn build_theme(dark: bool) -> Theme {
+    use std::str::FromStr;
+    use syntect::highlighting::{ScopeSelectors, StyleModifier, ThemeItem, ThemeSettings};
+    let fg = if dark { "#d4d4d4" } else { "#24292f" };
+    let bg = if dark { BG_DARK } else { BG_LIGHT };
+    let mut t = Theme { name: Some(if dark { "NotEdit One Dark" } else { "NotEdit GitHub Light" }.into()), ..Default::default() };
+    t.settings = ThemeSettings {
+        foreground: Some(hex(fg)),
+        background: Some(syntect::highlighting::Color { r: bg.0, g: bg.1, b: bg.2, a: 0xff }),
+        ..Default::default()
+    };
+    for (scope, l, d, style) in PALETTE {
+        let mut fs = FontStyle::empty();
+        if style.contains('b') { fs |= FontStyle::BOLD; }
+        if style.contains('i') { fs |= FontStyle::ITALIC; }
+        if style.contains('u') { fs |= FontStyle::UNDERLINE; }
+        if let Ok(sel) = ScopeSelectors::from_str(scope) {
+            t.scopes.push(ThemeItem { scope: sel, style: StyleModifier { foreground: Some(hex(if dark { d } else { l })), background: None, font_style: Some(fs) } });
+        }
+    }
+    t
+}
 
 /// Export the whole document as a standalone highlighted HTML page.
 pub fn export_html(text: &str, lang: &str, ext: Option<&str>, title: &str, dark: bool) -> String {
@@ -159,5 +230,22 @@ mod toml_tests {
         let r = Rope::from_str("[package]\nname = \"x\" # c\n");
         assert!(h.work(&r, 3, 10));
         assert!(h.line(1).unwrap().len() >= 3);
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    #[test]
+    fn palette_contrast_is_readable() {
+        for (scope, l, d, _) in PALETTE {
+            for (c, bg) in [(l, BG_LIGHT), (d, BG_DARK)] {
+                let h = hex(c);
+                let r = contrast((h.r, h.g, h.b), bg);
+                assert!(r >= 4.5, "{scope} {c} contrast {r:.2}");
+            }
+        }
+        assert_eq!(theme(false).scopes.len(), PALETTE.len());
+        assert_eq!(theme(true).scopes.len(), PALETTE.len());
     }
 }

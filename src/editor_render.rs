@@ -16,6 +16,8 @@ impl App {
         let w = ui.as_weak();
         self.idle.start(slint::TimerMode::SingleShot, Duration::from_secs(10), move || { if let Some(u) = w.upgrade() { u.set_caret_idle(true); } });
         let (cw, lh) = self.metrics();
+        let cjk_w = self.ui().get_cjk_w().max(1.0);
+        let ligatures = self.st.borrow().cfg.ligatures;
         let (w, h) = self.view_size(vi);
         if w <= 1.0 || h <= 1.0 { self.mark_dirty(); }
         self.ensure_layout(vi);
@@ -110,7 +112,13 @@ impl App {
             let mut run_style = (fg, false, false);
             let flush = |run: &mut String, start: usize, style: (slint::Color, bool, bool), toks: &mut Vec<EdTok>| {
                 if run.is_empty() { return; }
-                let x = px(start);
+                let mut x = px(start);
+                // a wide (CJK) glyph is narrower than its 2 cells: centre it instead of leaving
+                // all the slack on the right, so 中文 looks evenly spaced and stays on the grid
+                let mut it = run.chars();
+                if let (Some(c), None) = (it.next(), it.next()) {
+                    if unicode_width::UnicodeWidthChar::width(c) == Some(2) { x += ((2.0 * cw - cjk_w) / 2.0).max(0.0).round(); }
+                }
                 let wpx = run.chars().count() as f32 * cw;
                 if x + wpx >= -cw && x <= w + cw && !run.trim().is_empty() {
                     toks.push(EdTok { x, text: run.as_str().into(), color: style.0, bold: style.1, italic: style.2 });
@@ -122,7 +130,10 @@ impl App {
                 let style = spans.get(si).filter(|s| s.0 <= off && off < s.1).map(|s| (s.2, s.3, s.4)).unwrap_or((fg, false, false));
                 let c = chars[off];
                 let cwid = xs[off + 1 - row.start] - xs[off - row.start];
-                if c == '\t' || cwid != 1 || style != run_style || c.is_control() {
+                // without ligatures, break between adjacent operator characters so the
+                // font cannot merge e.g. `->` / `!=` / `>=` into one glyph
+                let lig_break = !ligatures && is_lig_char(c) && run.chars().last().is_some_and(is_lig_char);
+                if c == '\t' || cwid != 1 || style != run_style || c.is_control() || lig_break {
                     flush(&mut run, run_start, run_style, &mut toks);
                     run_style = style;
                     run_start = off;

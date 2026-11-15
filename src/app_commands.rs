@@ -385,7 +385,7 @@ impl App {
             "wrap" => { { let mut st = self.st.borrow_mut(); st.wrap = !st.wrap; } self.refresh_meta(); }
             "linenumbers" => { { let mut st = self.st.borrow_mut(); st.line_numbers = !st.line_numbers; } self.refresh_meta(); }
             "preview" => { { let mut st = self.st.borrow_mut(); st.preview = !st.preview; } self.refresh_meta(); self.refresh_preview(); }
-            "zoomreset" => { { let mut st = self.st.borrow_mut(); st.font = 14.0; } self.refresh_meta(); }
+            "zoomreset" => { { let mut st = self.st.borrow_mut(); st.font = settings::Settings::default().font; } self.refresh_meta(); }
             "toggleovr" => { { let mut st = self.st.borrow_mut(); st.overwrite = !st.overwrite; } self.refresh_meta(); }
             "stats" => { self.mad_action("wordcount"); }
             "datetime" => {

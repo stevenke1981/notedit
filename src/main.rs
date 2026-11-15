@@ -349,6 +349,9 @@ fn build_menus(st: &State) -> Vec<Menu> {
 }
 
 /// Width of a tab button (kept in Rust so drop targets can be computed exactly).
+/// Characters fonts like JetBrains Mono / Fira Code combine into ligatures.
+fn is_lig_char(c: char) -> bool { matches!(c, '-' | '=' | '<' | '>' | '!' | '|' | '&' | ':' | '+' | '*' | '/' | '~' | '.' | '#' | '?' | '%' | '^' | '_' | '$' | '\\' | '[' | ']' | '{' | '}' | ';') }
+
 fn tab_width(title: &str, bold: bool) -> f32 {
     let w: f32 = title.chars().map(|c| if unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) == 2 { 13.0 } else { 7.4 }).sum();
     let w = if bold { w * 1.08 } else { w };
@@ -618,6 +621,7 @@ fn main() -> Result<(), slint::PlatformError> {
         side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
         side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
+    editor::set_tab(st.cfg.tab_width);
     let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), preview_timer: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
