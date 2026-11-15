@@ -849,8 +849,9 @@ impl Application for Shell {
         let ((w0, h0), (w1, h1)) = (size_of(&layout.ed[0]), size_of(&layout.ed[1]));
         ui.set_v0_w(w0); ui.set_v0_h(h0); ui.set_v1_w(w1); ui.set_v1_h(h1);
         if before != (cell_w, line_h, w0, h0, w1, h1, cjk_w) {
+            // render synchronously (not tick(): its Replace-in-Files poll may open a modal)
             self.app.kick();
-            self.app.tick();
+            self.app.render_all();
             // the render may change the gutter width / scrollbars: lay out again
             layout = self.compute_layout(w, h);
         }

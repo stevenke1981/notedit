@@ -705,6 +705,13 @@ fn main() {
 /// `NOTEDIT_SCREENSHOT=<file.png>` additionally saves a CPU-rendered frame.
 fn smoke_test(a: &Rc<App>, out: PathBuf) {
     let ui = a.ui();
+    // GPU start-up can take longer than the initial delay: wait (up to 10 s) for a laid-out frame
+    static WAITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if (ui.get_win_w() <= 0.0 || ui.get_v0_h() <= 0.0) && WAITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 40 {
+        let a = a.clone();
+        Timer::single_shot(Duration::from_millis(250), move || smoke_test(&a, out));
+        return;
+    }
     a.action("side:2");
     // Exercise the real input handlers; timings cover handlers, not GPU frames.
     let mut interaction = String::new();
