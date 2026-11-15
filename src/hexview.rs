@@ -58,9 +58,9 @@ impl App {
         let h = d.hex.as_ref().unwrap();
         let len = h.buf.len();
         let wide = len > 0xFFFF_FFFF;
-        let fg = if dark { slint::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { slint::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
-        let dim = slint::Color::from_rgb_u8(0x9a, 0x9a, 0x9a);
-        let hi = if dark { slint::Color::from_rgb_u8(0x6c, 0xb6, 0xff) } else { slint::Color::from_rgb_u8(0x00, 0x40, 0xc0) };
+        let fg = if dark { crate::ui::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { crate::ui::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
+        let dim = crate::ui::Color::from_rgb_u8(0x9a, 0x9a, 0x9a);
+        let hi = if dark { crate::ui::Color::from_rgb_u8(0x6c, 0xb6, 0xff) } else { crate::ui::Color::from_rgb_u8(0x00, 0x40, 0xc0) };
         let num_w = (if wide { 10.0 } else { 8.0 }) * cw + 4.0;
         let gutter_w = 16.0 + num_w + 16.0;
         let sel = h.sel();
@@ -77,7 +77,7 @@ impl App {
             let mut asc = String::new();
             for (j, &b) in bytes.iter().enumerate() {
                 let color = if b == 0 { dim } else if (0x20..0x7f).contains(&b) { fg } else { hi };
-                toks.push(EdTok { x: hex_col(j) as f32 * cw, text: format!("{b:02X}").into(), color, bold: false, italic: false });
+                toks.push(EdTok { x: hex_col(j) as f32 * cw, text: format!("{b:02X}").into(), color: sc(color), bold: false, italic: false });
                 asc.push(crate::hex::ascii(b));
                 let p = off + j as u64;
                 if let Some((s, e)) = sel { if p >= s && p < e {
@@ -85,7 +85,7 @@ impl App {
                     rects.push(EdRect { x: (ASCII_COL + j) as f32 * cw, w: cw, kind: 0 });
                 } }
             }
-            if !asc.is_empty() { toks.push(EdTok { x: ASCII_COL as f32 * cw, text: asc.into(), color: fg, bold: false, italic: false }); }
+            if !asc.is_empty() { toks.push(EdTok { x: ASCII_COL as f32 * cw, text: asc.into(), color: sc(fg), bold: false, italic: false }); }
             if r == cur_row {
                 let j = (h.cur - off) as usize;
                 // caret in the active column, box in the other one

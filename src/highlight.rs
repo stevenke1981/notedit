@@ -1,6 +1,6 @@
 //! Incremental syntect highlighting with per-line state cache.
 use ropey::Rope;
-use slint::Color;
+use crate::ui::Color;
 use std::sync::OnceLock;
 use syntect::highlighting::{FontStyle, HighlightIterator, HighlightState, Highlighter, Theme};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet};

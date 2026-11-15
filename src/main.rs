@@ -395,6 +395,9 @@ fn line_chars(rope: &ropey::Rope, line: usize) -> Vec<char> {
     rope.line(line).chars().filter(|&c| c != '\n' && c != '\r').collect()
 }
 
+/// `ui::Color` → `slint::Color` at the remaining Slint boundary (removed in M3).
+fn sc(c: ui::Color) -> slint::Color { slint::Color::from_argb_u8(c.a, c.r, c.g, c.b) }
+
 fn digits(n: usize) -> usize { n.max(1).to_string().len() }
 
 impl State {

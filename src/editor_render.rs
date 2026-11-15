@@ -33,7 +33,7 @@ impl App {
         let State { docs, views, .. } = &mut *st;
         let v = &mut views[vi];
         let d = &mut docs[v.doc];
-        let fg = if dark { slint::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { slint::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
+        let fg = if dark { crate::ui::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { crate::ui::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
         let nrows = v.layout.len();
         let vr = ((h / lh).ceil() as usize).max(1);
         if v.sels.is_empty() { v.sels.push(Sel::caret(0)); }
@@ -102,7 +102,7 @@ impl App {
 
             // tokens
             let mut toks: Vec<EdTok> = Vec::new();
-            let spans: Vec<(usize, usize, slint::Color, bool, bool)> = match d.hl.line(row.line) {
+            let spans: Vec<(usize, usize, crate::ui::Color, bool, bool)> = match d.hl.line(row.line) {
                 Some(ts) => { let mut o = 0; ts.iter().map(|t| { let n = t.text.chars().count(); let s = (o, o + n, t.color, t.bold, t.italic); o += n; s }).collect() }
                 None => vec![(0, chars.len(), fg, false, false)],
             };
@@ -110,7 +110,7 @@ impl App {
             let mut run = String::new();
             let mut run_start = row.start;
             let mut run_style = (fg, false, false);
-            let flush = |run: &mut String, start: usize, style: (slint::Color, bool, bool), toks: &mut Vec<EdTok>| {
+            let flush = |run: &mut String, start: usize, style: (crate::ui::Color, bool, bool), toks: &mut Vec<EdTok>| {
                 if run.is_empty() { return; }
                 let mut x = px(start);
                 // a wide (CJK) glyph is narrower than its 2 cells: centre it instead of leaving
@@ -121,7 +121,7 @@ impl App {
                 }
                 let wpx = run.chars().count() as f32 * cw;
                 if x + wpx >= -cw && x <= w + cw && !run.trim().is_empty() {
-                    toks.push(EdTok { x, text: run.as_str().into(), color: style.0, bold: style.1, italic: style.2 });
+                    toks.push(EdTok { x, text: run.as_str().into(), color: sc(style.0), bold: style.1, italic: style.2 });
                 }
                 run.clear();
             };
@@ -220,7 +220,7 @@ impl App {
             let key = (v.doc, d.buf.version, h as i32, dark);
             if v.map_key != key {
                 v.map_key = key;
-                let col = if dark { slint::Color::from_argb_u8(150, 0xc8, 0xc8, 0xc8) } else { slint::Color::from_argb_u8(150, 0x50, 0x50, 0x50) };
+                let col = if dark { crate::ui::Color::from_argb_u8(150, 0xc8, 0xc8, 0xc8) } else { crate::ui::Color::from_argb_u8(150, 0x50, 0x50, 0x50) };
                 let step = if scale >= 1.0 { 1.0 } else { 1.0 / scale };
                 let mut out = Vec::new();
                 let mut y = 0.0f32;
@@ -232,7 +232,7 @@ impl App {
                     let len = editor::cells_between(&lc, 0, lc.len());
                     if len > ind {
                         let x = (ind as f32 * 0.7).min(80.0);
-                        out.push(MapLine { y, x, w: (((len - ind) as f32) * 0.7).min(82.0 - x).max(1.0), color: col });
+                        out.push(MapLine { y, x, w: (((len - ind) as f32) * 0.7).min(82.0 - x).max(1.0), color: sc(col) });
                     }
                     y += scale.max(1.0);
                     lf += step;
