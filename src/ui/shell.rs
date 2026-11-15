@@ -449,6 +449,13 @@ impl Shell {
             }
             _ => {}
         }
+        // shortcuts the field does not use (Ctrl+H, Ctrl+G, F3, ...) reach the window table
+        let field_shortcut = ctrl && !alt && matches!(character.as_deref().map(str::to_lowercase).as_deref(), Some("a" | "c" | "v" | "x" | "z" | "y"));
+        if (ctrl || alt || matches!(key, PlatformKey::Function(_) | PlatformKey::Insert)) && !field_shortcut && !(ctrl && alt) {
+            if let Some(t) = keys::slint_text(key, character.as_deref(), text.as_deref()) {
+                if self.app.global_key(&t, ctrl, shift, alt) { return; }
+            }
+        }
         if self.clipboard.is_none() { self.clipboard = acme_platform::Clipboard::new().ok(); }
         let mut f = self.ui.field(id);
         let changed = if ctrl && !alt {
@@ -471,7 +478,7 @@ impl Shell {
         let text = self.ui.field(id).text.clone();
         let ui = self.ui.clone();
         match (d, id) {
-            (DlgId::Find, _) => self.later(|a| { a.find(true); }),
+            (DlgId::Find, FieldId::Find) => self.later(|a| { a.find(true); }),
             (DlgId::Fif, FieldId::Find) => self.later(|a| a.fif_run()),
             (DlgId::Prompt, _) => { ui.set_prompt_visible(false); self.later(move |a| a.prompt_ok(&text)); }
             (DlgId::Goto, _) => self.later(move |a| a.goto_line(&text)),
@@ -558,7 +565,7 @@ impl Shell {
             Target::Field(d, id) => {
                 let (d, id) = (*d, *id);
                 self.set_focus(Focus::Field(d, id));
-                let off = self.field_offset(id, x - r.x - 4.0);
+                let off = self.field_offset(id, x - r.x - 5.0);
                 let mut f = ui.field(id);
                 if shift { let a = f.selection().map(|s| s.0).unwrap_or(f.cursor()); f.set_selection_range(a.min(off), a.max(off)); } else { f.move_cursor_to_offset(off); }
             }
@@ -599,7 +606,7 @@ impl Shell {
                 }
             }
             Target::Field(_, id) => {
-                let off = self.field_offset(id, x - r.x - 4.0);
+                let off = self.field_offset(id, x - r.x - 5.0);
                 let mut f = self.ui.field(id);
                 let anchor = match f.selection() { Some((s, e)) => if f.cursor() == e { s } else { e }, None => f.cursor() };
                 f.set_selection_range(anchor.min(off), anchor.max(off));
@@ -839,6 +846,7 @@ impl Application for Shell {
             let vis = dialog_visible(&ui, d);
             let i = dlg_index(d);
             if vis && !self.dlg_seen[i] {
+                if d == DlgId::Goto { ui.set_goto_text(String::new()); }
                 if let Some(f) = dialog_fields(&ui, d).first() { self.set_focus(Focus::Field(d, *f)); self.ui.field(*f).select_all(); }
             }
             if !vis && self.dlg_seen[i] { if let Focus::Field(fd, _) = self.focus { if fd == d { let vi = self.editor_vi(); self.set_focus(Focus::Editor(vi)); } } }

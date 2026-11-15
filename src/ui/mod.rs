@@ -17,6 +17,7 @@ pub mod view_editor;
 pub mod view_popup;
 pub mod view_preview;
 pub mod view_side;
+pub mod widgets;
 pub mod win;
 
 pub use state::AppWindow;
