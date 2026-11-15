@@ -1,4 +1,4 @@
-//! AI assistant side panel (port of app.slint). Gap G3: AcmeUI has no
+//! AI assistant side panel (port of the old window markup). Gap G3: AcmeUI has no
 //! multi-line editor, so the conversation and the reply are read-only wrapped
 //! text in wheel-scrolled boxes and the prompt is a single-line field (Enter
 //! sends). Gap G4: combo boxes open the shell's option popup.

@@ -1,6 +1,6 @@
 //! Headless editor core: rope buffer, multi-selection editing, undo grouping,
 //! visual-row layout (word wrap + folding) and fold-point detection.
-//! Everything here is independent of Slint so it can be unit-tested.
+//! Everything here is independent of the UI toolkit so it can be unit-tested.
 use ropey::Rope;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};

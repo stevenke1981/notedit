@@ -91,7 +91,4 @@ impl<'a> Painter<'a> {
         let t: String = chars[..lo].iter().collect::<String>() + "…";
         self.text(r.x, y, &t, font, color);
     }
-
-    pub fn hline(&mut self, x: f32, y: f32, w: f32, c: Color) { self.rect(R::new(x, y, w, 1.0), c); }
-    pub fn vline(&mut self, x: f32, y: f32, h: f32, c: Color) { self.rect(R::new(x, y, 1.0, h), c); }
 }

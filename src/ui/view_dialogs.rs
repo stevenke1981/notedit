@@ -1,5 +1,5 @@
-//! Dialogs (port of app.slint): find/replace, find in files, prompt, goto,
-//! about and rename. Non-modal like before; positions and sizes as in Slint.
+//! Dialogs (port of the old window markup): find/replace, find in files, prompt, goto,
+//! about and rename. Non-modal like before; positions and sizes as before.
 use super::hit::{CheckId, DlgId, FieldId, R};
 use super::paint::Painter;
 use super::shell::Ctx;
@@ -113,7 +113,7 @@ pub fn paint(p: &mut Painter, c: &Ctx, size: (f32, f32)) {
     if ui.get_about_visible() { about(p, c, size); }
 }
 
-/// The rename dialog sits above the context menu (app.slint order).
+/// The rename dialog sits above the context menu (original stacking order).
 pub fn paint_rename(p: &mut Painter, c: &Ctx, size: (f32, f32)) {
     if c.ui.get_rename_visible() {
         one_field(p, c, size, 380.0, 140.0, "重新命名", "新的檔名：", DlgId::Rename, FieldId::Rename, "確定", "rename_ok");

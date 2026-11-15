@@ -1,4 +1,4 @@
-//! HTML / Markdown preview pane (port of app.slint): word-wrapped blocks in a
+//! HTML / Markdown preview pane (port of the old window markup): word-wrapped blocks in a
 //! wheel-scrolled viewport.
 use super::hit::{Target, R};
 use super::paint::Painter;

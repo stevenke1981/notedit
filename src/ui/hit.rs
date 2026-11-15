@@ -1,5 +1,5 @@
 //! Hit targets recorded in paint order each frame and tested in reverse
-//! (topmost first), replacing Slint's TouchAreas.
+//! (topmost first), replacing the former toolkit's touch areas.
 
 /// Dialog text fields (single-line, backed by `acme_textinput`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -60,7 +60,6 @@ impl R {
     pub fn contains(&self, px: f32, py: f32) -> bool { px >= self.x && py >= self.y && px < self.x + self.w && py < self.y + self.h }
     pub fn right(&self) -> f32 { self.x + self.w }
     pub fn bottom(&self) -> f32 { self.y + self.h }
-    pub fn inset(&self, d: f32) -> R { R::new(self.x + d, self.y + d, (self.w - 2.0 * d).max(0.0), (self.h - 2.0 * d).max(0.0)) }
     pub fn intersect(&self, o: &R) -> R {
         let x = self.x.max(o.x);
         let y = self.y.max(o.y);

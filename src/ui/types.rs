@@ -1,7 +1,7 @@
-//! Plain-Rust replacements for the structs the Slint compiler used to generate.
+//! Plain-Rust replacements for the structs the old UI compiler used to generate.
 //! Field names are kept so the editor/render code reads the same as before.
 
-/// 8-bit sRGB colour with alpha (replaces `slint::Color`).
+/// 8-bit sRGB colour with alpha (replaces the old toolkit colour).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Color {
     pub r: u8,
@@ -14,11 +14,6 @@ impl Color {
     pub const fn from_rgb_u8(r: u8, g: u8, b: u8) -> Self { Color { r, g, b, a: 255 } }
     pub const fn from_argb_u8(a: u8, r: u8, g: u8, b: u8) -> Self { Color { r, g, b, a } }
     pub const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0 };
-    pub fn red(self) -> u8 { self.r }
-    pub fn green(self) -> u8 { self.g }
-    pub fn blue(self) -> u8 { self.b }
-    pub fn alpha(self) -> u8 { self.a }
-    pub fn with_alpha(self, a: u8) -> Self { Color { a, ..self } }
     pub fn to_acme(self) -> acme_core::Color {
         acme_core::Color::rgba(self.r as f32 / 255.0, self.g as f32 / 255.0, self.b as f32 / 255.0, self.a as f32 / 255.0)
     }
@@ -28,7 +23,7 @@ impl Color {
 pub const fn hex(v: u32) -> Color { Color::from_rgb_u8((v >> 16) as u8, (v >> 8) as u8, v as u8) }
 pub const fn hexa(v: u32) -> Color { Color::from_argb_u8(v as u8, (v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8) }
 
-/// The colours of the former `global Theme` (editor.slint).
+/// The colours of the former `global Theme` (old editor markup).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ThemeColors {
     pub editor_bg: Color,

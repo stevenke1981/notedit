@@ -19,8 +19,8 @@ use super::view_editor::{self, EdLayout};
 use super::{dispatch, keys, timer, view_ai, view_chrome, view_dialogs, view_popup, view_preview, view_side, win};
 use crate::App;
 
-/// Ratio of a font's natural line box (ascent + descent) to its size; Slint's
-/// metric text height, which AcmeUI does not expose.
+/// Ratio of a font's natural line box (ascent + descent) to its size (the old
+/// metric text height), which AcmeUI does not expose.
 const NATURAL: f32 = 1.2;
 pub const SIDE_W: f32 = 240.0;
 pub const AI_W: f32 = 360.0;
@@ -35,7 +35,6 @@ pub struct Scrolls { pub side: f32, pub hits: f32, pub preview: f32, pub ai: f32
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Layout {
-    pub size: (f32, f32),
     pub status: R,
     pub hits: Option<R>,
     pub side: Option<R>,
@@ -70,8 +69,6 @@ pub struct Ctx<'a> {
     pub tab_drag: Option<(usize, i32)>,
     pub tip: Option<(&'static str, f32)>,
     pub scroll: Scrolls,
-    pub combo_open: Option<u8>,
-    pub layout: &'a Layout,
     /// the editor font family has real bold / italic faces (cosmic-text would
     /// otherwise substitute a different, proportional family)
     pub mono_bold: bool,
@@ -323,7 +320,7 @@ impl Shell {
         }
         let ai_r = ai.then(|| { let r = R::new(x + 1.0, mid.y, AI_W, mid.h); x += AI_W + 1.0; r });
         let preview_r = preview.then(|| R::new(x + 1.0, mid.y, (w - x - 1.0).max(0.0), mid.h));
-        Layout { size: (w, h), status, hits, side, ed, split_bar, ai: ai_r, preview: preview_r }
+        Layout { status, hits, side, ed, split_bar, ai: ai_r, preview: preview_r }
     }
 
     // ------------------------------------------------------------------ painting
@@ -351,7 +348,7 @@ impl Shell {
             line_h, text_dy, cell_w, split: ui.get_split(), active_view: ui.get_active_view().max(0) as usize, editor_focus, field_focus,
             overwrite: ui.get_overwrite(), caret_idle: ui.get_caret_idle(), blink_on: self.blink_on.get(), preedit: &self.preedit,
             preedit_cursor: self.preedit_cursor, hover: self.hover.as_ref(), pressed: self.capture.as_ref().map(|c| &c.target),
-            tab_drag: self.tab_drag, tip, scroll: self.scroll, combo_open: self.combo_open.map(|c| c.0), layout: &layout,
+            tab_drag: self.tab_drag, tip, scroll: self.scroll,
             mono_bold, mono_italic, ui_bold, ui_italic,
         };
         let mut p = Painter::new(&mut scene, &mut self.fonts, &mut self.atlas, &mut self.cache, theme, self.scale, &mut self.hits);
@@ -429,7 +426,7 @@ impl Shell {
         // while an IME composition (注音/倉頡…) is active, keys belong to the IME
         if !self.preedit.is_empty() { return false; }
         self.blink_on.set(true);
-        let t = keys::slint_text(key, character.as_deref(), text.as_deref());
+        let t = keys::key_text(key, character.as_deref(), text.as_deref());
         if let Some(t) = &t {
             if self.app.ed_key(vi, t, ctrl, shift, alt) { return true; }
             if self.app.global_key(t, ctrl, shift, alt) { return true; }
@@ -465,7 +462,7 @@ impl Shell {
         // shortcuts the field does not use (Ctrl+H, Ctrl+G, F3, ...) reach the window table
         let field_shortcut = ctrl && !alt && matches!(character.as_deref().map(str::to_lowercase).as_deref(), Some("a" | "c" | "v" | "x" | "z" | "y"));
         if (ctrl || alt || matches!(key, PlatformKey::Function(_) | PlatformKey::Insert)) && !field_shortcut && !(ctrl && alt) {
-            if let Some(t) = keys::slint_text(key, character.as_deref(), text.as_deref()) {
+            if let Some(t) = keys::key_text(key, character.as_deref(), text.as_deref()) {
                 if self.app.global_key(&t, ctrl, shift, alt) { return; }
             }
         }
@@ -756,7 +753,7 @@ impl Shell {
                 if pressed { self.press(x, y, button, ctrl, shift, alt) } else { self.release(x, y, button) }
             }
             PlatformEvent::Scroll { delta_x, delta_y, lines, x, y, .. } => {
-                // AcmeUI reports 32 px per wheel line; Slint used 60 (three editor rows per notch)
+                // AcmeUI reports 32 px per wheel line; the old UI used 60 (three editor rows per notch)
                 let k = if lines { 60.0 / 32.0 } else { 1.0 };
                 self.wheel(x, y, delta_x * k, delta_y * k)
             }

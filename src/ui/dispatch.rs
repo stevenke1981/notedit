@@ -1,5 +1,5 @@
-//! Cross-thread "run this on the UI thread" queue (replaces
-//! `slint::invoke_from_event_loop` / `upgrade_in_event_loop`).
+//! Cross-thread "run this on the UI thread" queue (the former toolkit's
+//! `invoke_from_event_loop` / `upgrade_in_event_loop`).
 use std::sync::{Mutex, OnceLock};
 
 type Job = Box<dyn FnOnce() + Send>;

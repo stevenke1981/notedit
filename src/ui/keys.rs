@@ -1,5 +1,5 @@
 //! Map AcmeUI key events to the key-text vocabulary the editor (and recorded
-//! macros / user shortcuts) have always used — Slint's private-use key codes.
+//! macros / user shortcuts) have always used — private-use U+F7xx key codes.
 use acme_platform::PlatformKey;
 
 pub const UP: char = '\u{F700}';
@@ -10,7 +10,7 @@ pub const RIGHT: char = '\u{F703}';
 /// Key text for `ed_key`: control characters for editing keys, U+F7xx for
 /// navigation / function keys, otherwise the logical character (unaffected
 /// by Ctrl, so Ctrl+S yields "s").
-pub fn slint_text(key: PlatformKey, character: Option<&str>, text: Option<&str>) -> Option<String> {
+pub fn key_text(key: PlatformKey, character: Option<&str>, text: Option<&str>) -> Option<String> {
     let c = match key {
         PlatformKey::Tab => '\t',
         PlatformKey::Enter => '\n',
@@ -53,12 +53,12 @@ pub fn typed_text(key: PlatformKey, text: Option<&str>, ctrl: bool, alt: bool) -
 mod tests {
     use super::*;
     #[test]
-    fn vocabulary_matches_slint() {
-        assert_eq!(slint_text(PlatformKey::Function(3), None, None).as_deref(), Some("\u{F706}"));
-        assert_eq!(slint_text(PlatformKey::Function(8), None, None).as_deref(), Some("\u{F70B}"));
-        assert_eq!(slint_text(PlatformKey::Delete, None, None).as_deref(), Some("\u{7f}"));
-        assert_eq!(slint_text(PlatformKey::Other, Some("s"), Some("\u{13}")).as_deref(), Some("s"));
-        assert_eq!(slint_text(PlatformKey::PageDown, None, None).as_deref(), Some("\u{F72D}"));
+    fn vocabulary_is_stable() {
+        assert_eq!(key_text(PlatformKey::Function(3), None, None).as_deref(), Some("\u{F706}"));
+        assert_eq!(key_text(PlatformKey::Function(8), None, None).as_deref(), Some("\u{F70B}"));
+        assert_eq!(key_text(PlatformKey::Delete, None, None).as_deref(), Some("\u{7f}"));
+        assert_eq!(key_text(PlatformKey::Other, Some("s"), Some("\u{13}")).as_deref(), Some("s"));
+        assert_eq!(key_text(PlatformKey::PageDown, None, None).as_deref(), Some("\u{F72D}"));
         assert_eq!(typed_text(PlatformKey::Other, Some("a"), true, false), None);
         assert_eq!(typed_text(PlatformKey::Other, Some("@"), true, true).as_deref(), Some("@"));
         assert_eq!(typed_text(PlatformKey::Other, Some("中"), false, false).as_deref(), Some("中"));

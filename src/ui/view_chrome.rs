@@ -1,4 +1,4 @@
-//! Window chrome (port of app.slint): menu bar, toolbar, tab strip, status bar, tooltip.
+//! Window chrome (port of the old window markup): menu bar, toolbar, tab strip, status bar, tooltip.
 use super::hit::{Target, R};
 use super::paint::Painter;
 use super::shell::Ctx;

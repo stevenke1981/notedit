@@ -10,7 +10,7 @@ mod imp {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumThreadWindows, GetWindowLongPtrW, IsWindowVisible, LoadIconW, SendMessageW, GWL_STYLE, ICON_BIG, ICON_SMALL, WM_GETICON, WM_SETICON, WS_CAPTION,
+        EnumThreadWindows, GetWindowLongPtrW, IsWindowVisible, LoadIconW, SendMessageW, GWL_STYLE, ICON_BIG, ICON_SMALL, WM_SETICON, WS_CAPTION,
     };
 
     thread_local! { static MAIN: Cell<isize> = const { Cell::new(0) }; }
@@ -35,15 +35,6 @@ mod imp {
         if found != 0 { MAIN.with(|m| m.set(found)); Some(found) } else { None }
     }
 
-    /// (big, small) icons currently set on the window
-    pub fn icon_state(hwnd: isize) -> (bool, bool) {
-        unsafe {
-            let big = SendMessageW(hwnd as HWND, WM_GETICON, ICON_BIG as usize, 0);
-            let small = SendMessageW(hwnd as HWND, WM_GETICON, ICON_SMALL as usize, 0);
-            (big != 0, small != 0)
-        }
-    }
-
     /// Use the exe's icon resource (id 1, embedded by winresource) for the title bar / taskbar.
     pub fn set_icon(hwnd: isize) -> bool {
         unsafe {
@@ -65,7 +56,6 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     pub fn main_hwnd() -> Option<isize> { None }
-    pub fn icon_state(_: isize) -> (bool, bool) { (false, false) }
     pub fn set_icon(_: isize) -> bool { false }
     pub fn mods() -> Option<(bool, bool, bool)> { None }
 }

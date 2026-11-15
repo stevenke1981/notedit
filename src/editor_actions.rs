@@ -459,7 +459,7 @@ impl App {
     }
 
     pub(super) fn ed_input(&self, vi: usize, text: &str) {
-        // key events forwarded while idle may carry Slint's private-use key codes
+        // key events forwarded while idle may carry private-use navigation key codes
         let owned: String;
         let text = if text.chars().any(|c| ('\u{f700}'..='\u{f8ff}').contains(&c) || (c.is_control() && c != '\n' && c != '\t')) {
             owned = text.chars().filter(|c| !('\u{f700}'..='\u{f8ff}').contains(c) && (!c.is_control() || *c == '\n' || *c == '\t')).collect();

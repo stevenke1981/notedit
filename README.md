@@ -1,6 +1,6 @@
 # NotEdit
 
-以 **Rust + [Slint](https://slint.dev)** 製作的類 Notepad++ 文字編輯器，內建簡易 **HTML / Markdown 預覽**。介面為繁體中文。
+以 **Rust + [AcmeUI-Native](https://github.com/stevenke1981/AcmeUI-Native)** 製作的類 Notepad++ 文字編輯器，內建簡易 **HTML / Markdown 預覽**。介面為繁體中文。
 
 ## 下載
 
@@ -93,7 +93,7 @@
 - **打字機模式**（設定 → 打字機模式）：游標所在行保持在視窗垂直中央
 - **修改標記**：復原 / 取消復原回到上次存檔的內容時，分頁與標題列的修改標記會自動清除
 - 自動完成清單開啟時按右鍵，會關閉清單並正常顯示右鍵選單
-- **閒置 CPU 降低**：沒有變化時停止 30 ms 更新計時器，游標改用 Slint 內建的閃爍游標，不再有額外的重繪計時器（在無 GPU 的軟體繪圖環境中，閒置 CPU 由約 12% 降到約 6%；有 GPU 時幾乎為 0）
+- **閒置 CPU 降低**：沒有變化時停止 30 ms 更新計時器，閒置約 10 秒後游標停止閃爍，不再重繪（無 GPU 時自動改用 CPU 軟體繪圖）
 - 自動備份 / 當機還原：未存檔的文件會定期寫入還原日誌，異常結束後再次啟動時可還原
 
 ### v0.4.0：MadEdit 功能
@@ -122,7 +122,7 @@
 - **TOML 語法上色**
 - **拖放**：從檔案總管把檔案拖進視窗即可開啟；分頁可拖曳排序；滑鼠拖曳選取文字
 - **選單列**：檔案、編輯、搜尋、檢視、編碼、語言、設定、工具、巨集、執行、外掛、視窗、?
-- **工具列**：SVG 圖示（ui/icons）與滑鼠提示
+- **工具列**：文字 / Unicode 符號按鈕與滑鼠提示
 - **多分頁**：分頁顯示修改狀態（● / ○），可點 ✕ 關閉、拖曳排序，Ctrl+Tab 切換
 - **檔案**：開新、開啟（多選、命令列、拖放）、重新載入、儲存、另存、全部儲存、關閉 / 全部關閉 / 關閉其他、**最近開啟的檔案**清單、**匯出為 HTML**（含語法上色）、**列印**（以瀏覽器開啟可列印頁面，Ctrl+P）
 - **工作階段還原**：重新啟動時自動開回上次的檔案與游標位置（可在「設定」關閉）
@@ -140,7 +140,7 @@
 - **狀態列**：檔案類型、length / lines、Ln / Col / Pos / Sel、換行格式、編碼、INS/OVR、巨集錄製指示
 - **程式圖示**：視窗圖示與 Windows exe 圖示
 - **右鍵選單**：編輯區（復原/取消復原、剪下/複製/貼上/刪除、全選、大小寫、複製/刪除行、註解/取消註解 Ctrl+Q、搜尋選取文字、預覽）與分頁（關閉/關閉其他/關閉左側/右側、儲存、另存、重新命名、複製完整路徑/檔名、開啟所在資料夾），不可用項目會變灰
-- **字型**：預設為內嵌的 **JetBrains Mono**（SIL OFL 授權），另內嵌 DejaVu Sans Mono；「設定」選單可切換，並自動列出系統已安裝的 Cascadia Code、Consolas、Fira Code、Source Code Pro 等程式字型，選擇會保存。中文字由系統字型自動補字（Windows：微軟正黑體；Linux：Noto Sans CJK）
+- **字型**：使用系統已安裝的程式字型（預設為第一個找到的 Cascadia Code、Cascadia Mono、Consolas、Fira Code、Source Code Pro 等；都沒有時使用系統等寬字型）；「設定」選單可切換，選擇會保存。中文字由系統字型自動補字（Windows：微軟正黑體；Linux：Noto Sans CJK）
 
 ## 建置
 
@@ -171,12 +171,13 @@ NotEdit 會以目前 Notepad++ 的實際能力作為功能對照，而不是只�
 - XML 格式化為輕量實作，不驗證 DTD / 命名空間
 - 編輯器以等寬字格排版；比例字型或連字（ligature）不會依實際寬度顯示
 - 列印透過瀏覽器的列印功能；預覽為簡化版（不支援 CSS、圖片）
+- 介面改用 AcmeUI-Native 後：不再內嵌 JetBrains Mono / DejaVu 字型（只能使用系統字型）；字型缺少粗體 / 斜體字面時改以一般字面顯示；AI 助手的對話紀錄與回覆為唯讀，指令為單行輸入（Enter 送出）；工具列改用文字符號；彈出選單以細邊與淺陰影代替模糊陰影
 
 ## AI 文件助手
 
 按工具列的「AI 助手」或「工具 → AI 文件助手」，即可在文件右側開啟或收合助手，並在「對話」、「結果」及「設定」分頁操作。預設使用 `openrouter/free`；也可輸入以 `:free` 結尾的免費模型。在「設定 → OpenRouter API 金鑰」輸入金鑰，按「儲存金鑰」後，Windows 會使用目前登入帳戶的 DPAPI 加密，儲存在 NotEdit 設定目錄的 `openrouter-key.dpapi`，下次啟動優先讀取此金鑰；沒有已儲存金鑰時才使用 `OPENROUTER_API_KEY` 環境變數。也可選擇「本次使用」而不儲存，或刪除已儲存金鑰。其他平台目前僅支援本次使用或環境變數。請自行確認 OpenRouter 帳號的免費模型使用限制。
 
-勾選「傳送目前文件內容」後，文件文字會連同指令傳送至 OpenRouter。先前對話也會在後續請求中送出，可按「清除對話」清空。模型回覆會先顯示在可編輯的預覽欄；選擇套用到目前文件或建立新文件，再以一般儲存操作寫入磁碟。套用可使用 Ctrl+Z 復原。如果傳送後原文件已變更或切換，需重新送出後才能覆寫。請檢查產生的內容及 JSON 格式，模型可能產生錯誤。
+勾選「傳送目前文件內容」後，文件文字會連同指令傳送至 OpenRouter。先前對話也會在後續請求中送出，可按「清除對話」清空。模型回覆會先顯示在唯讀的預覽欄（可套用後在編輯器中修改）；選擇套用到目前文件或建立新文件，再以一般儲存操作寫入磁碟。套用可使用 Ctrl+Z 復原。如果傳送後原文件已變更或切換，需重新送出後才能覆寫。請檢查產生的內容及 JSON 格式，模型可能產生錯誤。
 
 對話分頁可選擇通用助手、校稿、翻譯、文字潤飾、摘要或格式整理。勾選傳送文件後，即使指令欄空白也可執行所選角色；選擇翻譯後可在「翻譯語言」選擇目標語言，或選擇自訂語言；預設為台灣繁體中文。
 
@@ -184,4 +185,4 @@ NotEdit 會以目前 Notepad++ 的實際能力作為功能對照，而不是只�
 
 ## 授權
 
-MIT License，詳見 [LICENSE](LICENSE)。拼字字典 en_US 來自 SCOWL / wooorm/dictionaries（`assets/dict/LICENSE-en_US.txt`）；繁簡轉換使用 ferrous-opencc（Apache-2.0）。內嵌字型：JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）、DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`）。
+MIT License，詳見 [LICENSE](LICENSE)。拼字字典 en_US 來自 SCOWL / wooorm/dictionaries（`assets/dict/LICENSE-en_US.txt`）；繁簡轉換使用 ferrous-opencc（Apache-2.0）。`ui/fonts` 保留先前內嵌的 JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）與 DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`），目前版本未載入。

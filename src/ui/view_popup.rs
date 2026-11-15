@@ -1,4 +1,4 @@
-//! Popups (port of app.slint): menu dropdown, context menu and the option list
+//! Popups (port of the old window markup): menu dropdown, context menu and the option list
 //! of a combo box (gap G4).
 use super::hit::{Target, R};
 use super::paint::Painter;

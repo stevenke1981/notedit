@@ -1,5 +1,5 @@
-//! Former Slint callbacks with logic of their own (menu dispatch, AI assistant,
-//! goto/count) and the window-level shortcut table that lived in app.slint.
+//! Former UI callbacks with logic of their own (menu dispatch, AI assistant,
+//! goto/count) and the window-level shortcut table of the old UI markup.
 use super::*;
 
 impl App {
@@ -55,7 +55,7 @@ impl App {
         ui.invoke_focus_editor();
     }
 
-    /// Window-level shortcuts (the `keys` FocusScope of app.slint); runs after the
+    /// Window-level shortcuts (the former window `keys` focus scope); runs after the
     /// editor rejected the key. Returns true when handled.
     pub(super) fn global_key(self: &Rc<Self>, t: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
         if self.custom_key(t, ctrl, shift, alt) { return true; }

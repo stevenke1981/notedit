@@ -1,4 +1,4 @@
-//! UI-thread timers (replaces `slint::Timer`). Callbacks run from the event loop's
+//! UI-thread timers (replace the former toolkit's `Timer`). Callbacks run from the event loop's
 //! background tick, outside any `App` borrow, via [`fire_due`].
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ impl Timer {
         self.id.get().is_some_and(|id| REG.with(|r| r.borrow().slots.contains_key(&id)))
     }
 
-    /// Run `cb` once after `d` (not cancellable, like `slint::Timer::single_shot`).
+    /// Run `cb` once after `d` (not cancellable, like the old `Timer::single_shot`).
     pub fn single_shot(d: Duration, cb: impl FnOnce() + 'static) {
         let mut cb = Some(cb);
         let t = Timer::default();

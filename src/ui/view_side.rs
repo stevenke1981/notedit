@@ -1,5 +1,5 @@
 //! Sidebar (folder workspace / function list) and the search-hits panel
-//! (port of app.slint). Lists use fixed 20 px rows, wheel scrolling and paint
+//! (port of the old window markup). Lists use fixed 20 px rows, wheel scrolling and paint
 //! only the visible rows (gap G4: no ListView).
 use super::hit::{Target, R};
 use super::paint::Painter;

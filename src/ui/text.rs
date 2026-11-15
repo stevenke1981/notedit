@@ -57,10 +57,6 @@ impl TextCache {
         if f % 30 == 0 { self.map.retain(|_, e| f - e.used <= EVICT_AFTER); }
     }
 
-    pub fn clear(&mut self) { self.map.clear(); }
-
-    pub fn len(&self) -> usize { self.map.len() }
-
     /// Shaped layout for `text` (single line unless `wrap_w` is given).
     pub fn layout(&mut self, fonts: &mut FontSystem, text: &str, font: &Font, wrap_w: Option<f32>, scale: f32) -> &TextLayout {
         let wrap = wrap_w.map(|w| w.max(1.0).to_bits());

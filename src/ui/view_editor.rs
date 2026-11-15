@@ -1,4 +1,4 @@
-//! Editor surface (port of ui/editor.slint): gutter, rows, selections, carets,
+//! Editor surface (port of the old editor markup): gutter, rows, selections, carets,
 //! IME preedit, autocomplete popup, scrollbars and document map.
 use super::hit::{Target, R};
 use super::paint::Painter;

@@ -1,4 +1,4 @@
-//! `AppWindow`: the plain-Rust replacement for the Slint-generated window
+//! `AppWindow`: the plain-Rust replacement for the generated window
 //! component. It keeps every former `in`/`in-out` property behind the same
 //! `set_x` / `get_x` names so the application code reads unchanged; any
 //! change flags a redraw for the shell.
@@ -191,7 +191,7 @@ impl AppWindow {
     pub fn invoke_focus_editor(&self) { self.0.focus_editor.set(true); self.0.dirty.set(true); }
     pub fn take_focus_editor(&self) -> bool { self.0.focus_editor.replace(false) }
 
-    /// Close the window without asking again (replaces `slint::quit_event_loop`).
+    /// Close the window without asking again (replaces the old `quit_event_loop`).
     pub fn request_quit(&self) { self.0.quit.set(true); self.0.dirty.set(true); }
     pub fn quit_requested(&self) -> bool { self.0.quit.get() }
     /// Un-minimise and focus the window (second instance forwarded files).
