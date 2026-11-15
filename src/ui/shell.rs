@@ -129,6 +129,8 @@ pub struct Shell {
     /// content heights of the scrollable text panes (preview, AI) from the last frame
     preview_h: f32,
     ai_h: f32,
+    /// (history length, page) last painted: new replies scroll the history to the end
+    ai_seen: (usize, i32),
 }
 
 /// Run the window until it closes.
@@ -146,7 +148,7 @@ pub fn run(app: Rc<App>) -> Result<(), String> {
         tab_drag: None, side_click: (None, usize::MAX), scroll: Scrolls::default(), combo_open: None, dlg_seen: [false; 7], ime_rect: None,
         metrics_key: (String::new(), 0, 0, 0), metrics: (8.0, 18.0, 0.0, 16.0, 17.0), fontdb: db, styles: Default::default(),
         script: std::env::var_os("NOTEDIT_SCRIPT").and_then(|p| std::fs::read_to_string(p).ok()).map(|s| super::script::parse(&s).into()).unwrap_or_default(),
-        script_next: None, forced_mods: None, preview_h: 0.0, ai_h: 0.0,
+        script_next: None, forced_mods: None, preview_h: 0.0, ai_h: 0.0, ai_seen: (0, -1),
     };
     acme_run(shell).map_err(|e| e.to_string())
 }
@@ -368,9 +370,10 @@ impl Shell {
             }
         }
         if let Some(b) = layout.split_bar { p.rect(b, theme.border); }
+        let mut ai_h = 0.0;
         if let Some(r) = layout.ai {
             p.rect(R::new(r.x - 1.0, r.y, 1.0, r.h), theme.border);
-            view_ai::paint(&mut p, &ctx, r);
+            ai_h = view_ai::paint(&mut p, &ctx, r);
         }
         if let Some(r) = layout.preview {
             p.rect(R::new(r.x - 1.0, r.y, 1.0, r.h), super::types::hex(0xaaaaaa));
@@ -388,6 +391,7 @@ impl Shell {
         drop(p);
         self.menu_titles = titles;
         self.preview_h = preview_h;
+        self.ai_h = ai_h;
         scene
     }
 
@@ -872,6 +876,11 @@ impl Application for Shell {
         if want_blink && !self.blink.running() { self.start_blink(); }
         if !want_blink && self.blink.running() { self.blink.stop(); self.blink_on.set(true); }
 
+        let seen = (ui.get_ai_history().len(), ui.get_ai_page());
+        if seen != self.ai_seen {
+            self.scroll.ai = if seen.1 == 0 { f32::MAX } else if seen.1 != self.ai_seen.1 { 0.0 } else { self.scroll.ai };
+            self.ai_seen = seen;
+        }
         if let Some(path) = ui.take_screenshot() {
             // a fresh CPU renderer needs every glyph upload: paint once from an empty atlas
             self.atlas.clear();
