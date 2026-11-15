@@ -76,6 +76,8 @@ pub struct Ctx<'a> {
     /// otherwise substitute a different, proportional family)
     pub mono_bold: bool,
     pub mono_italic: bool,
+    pub ui_bold: bool,
+    pub ui_italic: bool,
 }
 
 impl Ctx<'_> {
@@ -124,6 +126,9 @@ pub struct Shell {
     script: std::collections::VecDeque<super::script::Step>,
     script_next: Option<Instant>,
     forced_mods: Option<(bool, bool, bool)>,
+    /// content heights of the scrollable text panes (preview, AI) from the last frame
+    preview_h: f32,
+    ai_h: f32,
 }
 
 /// Run the window until it closes.
@@ -141,7 +146,7 @@ pub fn run(app: Rc<App>) -> Result<(), String> {
         tab_drag: None, side_click: (None, usize::MAX), scroll: Scrolls::default(), combo_open: None, dlg_seen: [false; 7], ime_rect: None,
         metrics_key: (String::new(), 0, 0, 0), metrics: (8.0, 18.0, 0.0, 16.0, 17.0), fontdb: db, styles: Default::default(),
         script: std::env::var_os("NOTEDIT_SCRIPT").and_then(|p| std::fs::read_to_string(p).ok()).map(|s| super::script::parse(&s).into()).unwrap_or_default(),
-        script_next: None, forced_mods: None,
+        script_next: None, forced_mods: None, preview_h: 0.0, ai_h: 0.0,
     };
     acme_run(shell).map_err(|e| e.to_string())
 }
@@ -337,15 +342,18 @@ impl Shell {
         let field_focus = match self.focus { Focus::Field(d, f) => Some((d, f)), _ => None };
         let layout = self.layout;
         let (mono_bold, mono_italic) = self.mono_styles(&ui.get_mono());
+        let ui_family = self.ui_family.clone();
+        let (ui_bold, ui_italic) = self.mono_styles(&ui_family);
         let ctx = Ctx {
             ui: &ui, dark: ui.get_dark(), ui_family: &self.ui_family, mono: ui.get_mono(), font_size: ui.get_editor_font_size(), nat_h,
             line_h, text_dy, cell_w, split: ui.get_split(), active_view: ui.get_active_view().max(0) as usize, editor_focus, field_focus,
             overwrite: ui.get_overwrite(), caret_idle: ui.get_caret_idle(), blink_on: self.blink_on.get(), preedit: &self.preedit,
             preedit_cursor: self.preedit_cursor, hover: self.hover.as_ref(), pressed: self.capture.as_ref().map(|c| &c.target),
             tab_drag: self.tab_drag, tip, scroll: self.scroll, combo_open: self.combo_open.map(|c| c.0), layout: &layout,
-            mono_bold, mono_italic,
+            mono_bold, mono_italic, ui_bold, ui_italic,
         };
         let mut p = Painter::new(&mut scene, &mut self.fonts, &mut self.atlas, &mut self.cache, theme, self.scale, &mut self.hits);
+        let mut preview_h = 0.0;
         let titles = view_chrome::menubar(&mut p, &ctx, w);
         view_chrome::toolbar(&mut p, &ctx, w);
         view_chrome::tabs(&mut p, &ctx, w);
@@ -366,7 +374,7 @@ impl Shell {
         }
         if let Some(r) = layout.preview {
             p.rect(R::new(r.x - 1.0, r.y, 1.0, r.h), super::types::hex(0xaaaaaa));
-            view_preview::paint(&mut p, &ctx, r);
+            preview_h = view_preview::paint(&mut p, &ctx, r);
         }
         if let Some(r) = layout.hits { view_side::hits(&mut p, &ctx, r); }
         view_chrome::status(&mut p, &ctx, layout.status);
@@ -379,6 +387,7 @@ impl Shell {
         view_popup::combo(&mut p, &ctx, (w, h), combo);
         drop(p);
         self.menu_titles = titles;
+        self.preview_h = preview_h;
         scene
     }
 
@@ -691,14 +700,19 @@ impl Shell {
         // G9: Scroll carries no modifiers; ask Windows, else use the last known state
         let (ctrl, shift, _) = self.forced_mods.take().or_else(win::mods).unwrap_or(self.mods);
         let step = |v: &mut f32, d: f32, max: f32| { *v = (*v - d).clamp(0.0, max.max(0.0)); };
+        let l = self.layout;
+        let side_max = l.side.map_or(0.0, |r| view_side::max_scroll(self.ui.side_items_ref().len(), r.h - view_side::SIDE_HEAD));
+        let hits_max = l.hits.map_or(0.0, |r| view_side::max_scroll(self.ui.hits_ref().len(), r.h - view_side::HITS_HEAD - 2.0));
+        let preview_max = l.preview.map_or(0.0, |r| self.preview_h - (r.h - 22.0));
+        let ai_max = self.ai_h;
         match t {
             Target::Editor(vi) | Target::Gutter(vi) | Target::VBar(vi) | Target::HBar(vi) | Target::Map(vi) | Target::AcItem(vi, _) => {
                 self.app.ed_wheel(vi, dx, dy, shift, ctrl);
             }
-            Target::SideRow(_) | Target::SideList => step(&mut self.scroll.side, dy, f32::MAX),
-            Target::Hit(_) | Target::HitsList => step(&mut self.scroll.hits, dy, f32::MAX),
-            Target::Preview => step(&mut self.scroll.preview, dy, f32::MAX),
-            Target::AiScroll => step(&mut self.scroll.ai, dy, f32::MAX),
+            Target::SideRow(_) | Target::SideList => step(&mut self.scroll.side, dy, side_max),
+            Target::Hit(_) | Target::HitsList => step(&mut self.scroll.hits, dy, hits_max),
+            Target::Preview => step(&mut self.scroll.preview, dy, preview_max),
+            Target::AiScroll => step(&mut self.scroll.ai, dy, ai_max),
             _ => return false,
         }
         self.ui.request_redraw();
