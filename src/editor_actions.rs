@@ -60,7 +60,7 @@ impl App {
         self.refresh_meta();
         if self.st.borrow().preview {
             let me = self.me.borrow().clone();
-            self.preview_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(180), move || {
+            self.preview_timer.start(TimerMode::SingleShot, Duration::from_millis(180), move || {
                 if let Some(app) = me.upgrade() { app.refresh_preview(); }
             });
         }
@@ -544,7 +544,7 @@ impl App {
         }
         let lk = k.to_ascii_lowercase();
         let run = |name: &'static str| {
-            if let Some(me) = self.me.borrow().upgrade() { slint::Timer::single_shot(std::time::Duration::from_millis(0), move || me.action(name)); }
+            if let Some(me) = self.me.borrow().upgrade() { Timer::single_shot(std::time::Duration::from_millis(0), move || me.action(name)); }
         };
         if alt && !ctrl && matches!(k, '0' | ')') { run(if shift || k == ')' { "unfoldall" } else { "foldall" }); return true; }
         if alt && ctrl && lk == 'f' { run("foldcur"); return true; }
@@ -962,9 +962,9 @@ impl App {
         self.refresh_meta();
         let ui = self.ui();
         // wait for the layout to give the second view its size
-        let w = self.ui.clone();
+        let w = self.ui();
         let me = self.me.borrow().clone();
-        slint::Timer::single_shot(Duration::from_millis(20), move || { if let Some(a) = me.upgrade() { a.render_all(); } if let Some(ui) = w.upgrade() { ui.invoke_focus_editor(); } });
+        Timer::single_shot(Duration::from_millis(20), move || { if let Some(a) = me.upgrade() { a.render_all(); } w.invoke_focus_editor(); });
         ui.invoke_focus_editor();
     }
 

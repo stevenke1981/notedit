@@ -9,7 +9,7 @@ pub enum FieldId { Find, Replace, FifDir, FifFilter, Prompt, Rename, Goto, AiKey
 pub enum CheckId { MatchCase, WholeWord, UseRegex, ReplaceMode, FifRecursive, FifReplace, AiIncludeDoc }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum DlgId { Find, Fif, Prompt, Goto, About, Rename }
+pub enum DlgId { Find, Fif, Prompt, Goto, About, Rename, Ai }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
@@ -37,7 +37,7 @@ pub enum Target {
     HitsClose,
     HitsList,
     Preview,
-    Field(FieldId),
+    Field(DlgId, FieldId),
     Check(CheckId),
     /// a push button: its action id
     Button(&'static str),

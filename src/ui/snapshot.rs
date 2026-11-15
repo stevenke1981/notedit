@@ -5,6 +5,19 @@ use acme_core::Scene;
 
 /// Render `scene` (which must carry every atlas upload it uses) into an RGB PNG.
 pub fn write_png(scene: &Scene, width: f32, height: f32, scale: f32, path: &std::path::Path) -> Result<(), String> {
+    if std::env::var_os("NOTEDIT_SCENE_DUMP").is_some() {
+        use acme_core::DrawCommand as D;
+        let mut depth = 0;
+        for c in scene.commands() {
+            match c {
+                D::PushClip(r) => { eprintln!("{:w$}clip {:?}", "", (r.origin.x.get(), r.origin.y.get(), r.size.width.get(), r.size.height.get()), w = depth * 2); depth += 1; }
+                D::PopClip => depth -= 1,
+                D::Text(t) => eprintln!("{:w$}text at {:.0},{:.0} glyphs={} uploads={}", "", t.origin.x.get(), t.origin.y.get(), t.glyphs.len(), t.uploads.len(), w = depth * 2),
+                D::Quad(q) => eprintln!("{:w$}quad {:?} a={:.2}", "", (q.rect.origin.x.get(), q.rect.origin.y.get(), q.rect.size.width.get(), q.rect.size.height.get()), q.color.a, w = depth * 2),
+                _ => {}
+            }
+        }
+    }
     let (w, h) = ((width * scale).round().max(1.0) as u32, (height * scale).round().max(1.0) as u32);
     let mut r = acme_render_cpu::CpuRenderer::new(w, h, scale).map_err(|e| e.to_string())?;
     r.render_scene(scene).map_err(|e| e.to_string())?;

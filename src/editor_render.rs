@@ -13,8 +13,8 @@ impl App {
         if self.is_hex(vi) { self.hex_render(vi); return; }
         let ui = self.ui();
         if ui.get_caret_idle() { ui.set_caret_idle(false); }
-        let w = ui.as_weak();
-        self.idle.start(slint::TimerMode::SingleShot, Duration::from_secs(10), move || { if let Some(u) = w.upgrade() { u.set_caret_idle(true); } });
+        let u = ui.clone();
+        self.idle.start(TimerMode::SingleShot, Duration::from_secs(10), move || u.set_caret_idle(true));
         let (cw, lh) = self.metrics();
         let cjk_w = self.ui().get_cjk_w().max(1.0);
         let ligatures = self.st.borrow().cfg.ligatures;
@@ -121,7 +121,7 @@ impl App {
                 }
                 let wpx = run.chars().count() as f32 * cw;
                 if x + wpx >= -cw && x <= w + cw && !run.trim().is_empty() {
-                    toks.push(EdTok { x, text: run.as_str().into(), color: sc(style.0), bold: style.1, italic: style.2 });
+                    toks.push(EdTok { x, text: run.as_str().into(), color: style.0, bold: style.1, italic: style.2 });
                 }
                 run.clear();
             };
@@ -186,11 +186,11 @@ impl App {
             }
             let fold = if row.start == 0 && d.fold_end(row.line).is_some() { if d.folds.contains(&row.line) { 2 } else { 1 } } else { 0 };
             rows.push(EdRow {
-                num: if row.start == 0 { (row.line + 1).to_string().into() } else { SharedString::new() },
+                num: if row.start == 0 { (row.line + 1).to_string() } else { String::new() },
                 line: row.line as i32, fold, cur: row.line == head_line,
                 mark: row.start == 0 && d.bookmarks.contains(&row.line),
                 diff: d.diff.as_ref().filter(|x| x.0 == d.buf.version).and_then(|x| x.1.get(&row.line)).map(|&k| k as i32).unwrap_or(0),
-                toks: ModelRc::new(VecModel::from(toks)), rects: ModelRc::new(VecModel::from(rects)),
+                toks, rects,
             });
         }
         v.max_w = max_w;
@@ -208,7 +208,7 @@ impl App {
 
         // ---- autocomplete
         let (ac_items, ac_sel, ac_visible) = match &v.ac {
-            Some(ac) => (ac.items.iter().take(10).map(|s| SharedString::from(s.as_str())).collect::<Vec<_>>(), ac.sel as i32, true),
+            Some(ac) => (ac.items.iter().take(10).cloned().collect::<Vec<_>>(), ac.sel as i32, true),
             None => (vec![], 0, false),
         };
 
@@ -232,7 +232,7 @@ impl App {
                     let len = editor::cells_between(&lc, 0, lc.len());
                     if len > ind {
                         let x = (ind as f32 * 0.7).min(80.0);
-                        out.push(MapLine { y, x, w: (((len - ind) as f32) * 0.7).min(82.0 - x).max(1.0), color: sc(col) });
+                        out.push(MapLine { y, x, w: (((len - ind) as f32) * 0.7).min(82.0 - x).max(1.0), color: col });
                     }
                     y += scale.max(1.0);
                     lf += step;
@@ -247,13 +247,12 @@ impl App {
         let title = if split { format!("{}{}", if d.modified { "● " } else { "" }, d.title) } else { String::new() };
         let map_lines = if docmap { v.map.clone() } else { vec![] };
         drop(st);
-        let previous = if vi == 0 { ui.get_v0() } else { ui.get_v1() };
         let state = EdState {
-            rows: render_model::update_rows(previous.rows, rows), carets: render_model::update(previous.carets, carets),
+            rows, carets,
             gutter_w, num_w, thumb_pos, thumb_size, hthumb_pos, hthumb_size, hbar,
-            ac_items: render_model::update(previous.ac_items, ac_items), ac_sel, ac_visible,
-            title: title.into(),
-            map_lines: render_model::update(previous.map_lines, map_lines), map_view_y: map_y, map_view_h: map_h,
+            ac_items, ac_sel, ac_visible,
+            title,
+            map_lines, map_view_y: map_y, map_view_h: map_h,
         };
         if vi == 0 { ui.set_v0(state); } else { ui.set_v1(state); }
         self.rkey.borrow_mut()[vi] = (cw, lh, w, h);
@@ -263,7 +262,7 @@ impl App {
     pub(super) fn refresh_status(&self) {
         if self.st.borrow().side_mode == 2 { self.side_refresh(); }
         let ui = self.ui();
-        if let Some(s) = self.hex_status() { ui.set_st_pos(s.into()); return; }
+        if let Some(s) = self.hex_status() { ui.set_st_pos(s); return; }
         let st = self.st.borrow();
         let v = &st.views[st.view_idx()];
         let r = &st.docs[v.doc].buf.rope;
@@ -276,7 +275,7 @@ impl App {
         let mut s = format!("Ln : {}    Col : {}    Pos : {}", line + 1, col + 1, head + 1);
         if sel > 0 { s += &format!("    Sel : {}", sel); }
         if v.sels.len() > 1 { s += &format!("  ({} 個游標)", v.sels.len()); }
-        ui.set_st_pos(s.into());
+        ui.set_st_pos(s);
     }
 
     /// Periodic: re-render when sizes/metrics changed or highlighting is still in progress.
@@ -287,7 +286,7 @@ impl App {
     pub(super) fn kick(&self) {
         if self.ticker.running() { return; }
         let me = self.me.borrow().clone();
-        self.ticker.start(slint::TimerMode::Repeated, Duration::from_millis(30), move || { if let Some(a) = me.upgrade() { a.tick(); } });
+        self.ticker.start(TimerMode::Repeated, Duration::from_millis(30), move || { if let Some(a) = me.upgrade() { a.tick(); } });
     }
 
     pub(super) fn tick(&self) {

@@ -1,5 +1,5 @@
 //! Markdown / HTML -> simple block model for the preview pane.
-use crate::Block;
+use crate::ui::Block;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 fn blk(text: String, kind: i32, indent: i32) -> Block {

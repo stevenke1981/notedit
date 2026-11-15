@@ -2,7 +2,7 @@
 use super::*;
 
 impl App {
-    pub(super) fn ui(&self) -> AppWindow { self.ui.upgrade().unwrap() }
+    pub(super) fn ui(&self) -> AppWindow { self.ui.clone() }
 
     pub(super) fn refresh_all(&self) {
         { let mut st = self.st.borrow_mut(); st.load_view0(); }
@@ -133,15 +133,12 @@ impl App {
         let st = self.st.borrow();
         let shown = st.views[st.view_idx()].doc.min(st.docs.len() - 1);
         let d = &st.docs[shown];
-        let tabs: Vec<TabInfo> = st.docs.iter().enumerate().map(|(i, d)| TabInfo { title: d.title.clone().into(), modified: d.modified, w: tab_width(&d.title, i == shown) }).collect();
-        // only replace the model when it really changed (keeps tab TouchAreas alive during drags)
-        let model = ui.get_tabs();
-        let same = model.row_count() == tabs.len() && tabs.iter().enumerate().all(|(i, t)| model.row_data(i).as_ref() == Some(t));
-        if !same { ui.set_tabs(ModelRc::new(VecModel::from(tabs))); }
+        let tabs: Vec<TabInfo> = st.docs.iter().enumerate().map(|(i, d)| TabInfo { title: d.title.clone(), modified: d.modified, w: tab_width(&d.title, i == shown) }).collect();
+        ui.set_tabs(tabs);
         ui.set_current_tab(shown as i32);
-        ui.set_menus(ModelRc::new(VecModel::from(build_menus(&st))));
+        ui.set_menus(build_menus(&st));
         let name = d.path.as_ref().map(|p| p.display().to_string()).unwrap_or(d.title.clone());
-        ui.set_window_title(format!("{}{} - NotEdit", if d.modified { "*" } else { "" }, name).into());
+        ui.set_window_title(format!("{}{} - NotEdit", if d.modified { "*" } else { "" }, name));
         ui.set_split(st.split);
         ui.set_docmap(st.docmap);
         ui.set_active_view(st.view_idx() as i32);
@@ -150,7 +147,7 @@ impl App {
         ui.set_show_preview(st.preview && matches!(d.lang.as_str(), "markdown" | "html" | "xml"));
         ui.set_overwrite(st.overwrite);
         ui.set_dark(st.dark);
-        ui.set_mono(st.font_family.as_str().into());
+        ui.set_mono(st.font_family.clone());
         ui.set_macro_recording(st.macro_rec);
         ui.set_st_type(lang_desc(&d.lang).into());
         ui.set_st_eol(d.eol.label().into());
@@ -237,8 +234,8 @@ impl App {
                 b.truncate(1); b
             }
         };
-        ui.set_preview_title(d.title.clone().into());
-        ui.set_preview_blocks(ModelRc::new(VecModel::from(blocks)));
+        ui.set_preview_title(d.title.clone());
+        ui.set_preview_blocks(blocks);
     }
 
     /// Command-line / forwarded argument: folders become the workspace.

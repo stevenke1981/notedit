@@ -1,6 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
-slint::include_modules!();
 mod app_actions;
+mod app_callbacks;
 mod app_commands;
 mod editor_actions;
 mod editor_render;
@@ -24,15 +24,13 @@ mod file_io;
 mod recovery;
 mod file_watch;
 mod bookmarks;
-mod render_model;
 mod agent;
 mod credentials;
 mod ai_files;
 mod ui;
 
-use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
-
-use slint::{Model, ModelRc, SharedString, VecModel};
+use ui::timer::{Timer, TimerMode};
+use ui::{AppWindow, EdCaret, EdRect, EdRow, EdState, EdTok, MapLine, Menu, MenuItem, SearchHit, SideItem, TabInfo};
 use editor::{EditKind, Layout, Sel};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -252,7 +250,8 @@ fn sep() -> MenuItem { MenuItem { label: "".into(), shortcut: "".into(), action:
 fn en(label: &str, shortcut: &str, action: &str, e: bool) -> MenuItem { let mut m = mi(label, shortcut, action); m.enabled = e; m }
 fn chk(label: &str, shortcut: &str, action: &str, c: bool) -> MenuItem { let mut m = mi(label, shortcut, action); m.checked = c; m }
 
-const BUNDLED_FONTS: &[&str] = &["JetBrains Mono", "DejaVu Sans Mono"];
+/// AcmeUI loads system fonts only (gap G1): the TTFs in ui/fonts are no longer bundled.
+const BUNDLED_FONTS: &[&str] = &[];
 const SYSTEM_MONO_FONTS: &[&str] = &["Cascadia Code", "Cascadia Mono", "Consolas", "Fira Code", "Fira Mono", "Source Code Pro", "Hack",
     "Ubuntu Mono", "Noto Sans Mono", "Menlo", "SF Mono", "Monaco", "Courier New", "Sarasa Mono TC", "Roboto Mono", "Iosevka"];
 
@@ -276,7 +275,7 @@ fn recent_items(st: &State) -> Vec<MenuItem> {
 
 fn build_menus(st: &State) -> Vec<Menu> {
     let d = &st.docs[st.views[st.view_idx()].doc];
-    let menu = |t: &str, items: Vec<MenuItem>| Menu { title: t.into(), items: ModelRc::new(VecModel::from(items)) };
+    let menu = |t: &str, items: Vec<MenuItem>| Menu { title: t.into(), items };
     let mut lang_items: Vec<MenuItem> = LANGS.iter().map(|l| chk(l.0, "", &format!("lang:{}", l.0), d.lang == l.0)).collect();
     lang_items.insert(1, sep());
     let mut win_items = vec![mi("下一個分頁", "Ctrl+Tab", "nexttab"), mi("上一個分頁", "", "prevtab"), sep()];
@@ -342,8 +341,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
     // show user-defined shortcuts in the menus
     if !st.cfg.keys.is_empty() {
         for m in &mut menus {
-            let items: Vec<MenuItem> = m.items.iter().map(|mut it| { if let Some(k) = st.cfg.keys.get(it.action.as_str()) { it.shortcut = panels::norm_combo(k).into(); } it }).collect();
-            m.items = ModelRc::new(VecModel::from(items));
+            for it in m.items.iter_mut() { if let Some(k) = st.cfg.keys.get(it.action.as_str()) { it.shortcut = panels::norm_combo(k); } }
         }
     }
     menus
@@ -360,17 +358,17 @@ fn tab_width(title: &str, bold: bool) -> f32 {
 }
 
 struct App {
-    ui: slint::Weak<AppWindow>,
+    ui: AppWindow,
     st: RefCell<State>,
     me: RefCell<std::rc::Weak<App>>,
     clip: RefCell<Option<arboard::Clipboard>>,
     ai_key: RefCell<String>,
     dirty: std::cell::Cell<bool>,
     rkey: RefCell<[(f32, f32, f32, f32); 2]>,
-    ticker: slint::Timer,
-    preview_timer: slint::Timer,
+    ticker: Timer,
+    preview_timer: Timer,
     /// fires after 10 s without rendering; switches to a static caret
-    idle: slint::Timer,
+    idle: Timer,
 }
 
 // ======================================================================
@@ -394,9 +392,6 @@ fn line_chars(rope: &ropey::Rope, line: usize) -> Vec<char> {
     if line >= rope.len_lines() { return vec![]; }
     rope.line(line).chars().filter(|&c| c != '\n' && c != '\r').collect()
 }
-
-/// `ui::Color` → `slint::Color` at the remaining Slint boundary (removed in M3).
-fn sc(c: ui::Color) -> slint::Color { slint::Color::from_argb_u8(c.a, c.r, c.g, c.b) }
 
 fn digits(n: usize) -> usize { n.max(1).to_string().len() }
 
@@ -591,7 +586,15 @@ fn shell_result(r: Result<String, String>) -> i32 {
     if ok { 0 } else { 1 }
 }
 
-fn main() -> Result<(), slint::PlatformError> {
+/// Editor font: the configured family when installed, else the first installed
+/// programming font, else the generic monospace family.
+fn pick_font(cfg: &str, choices: &[String]) -> String {
+    let want = cfg.trim();
+    if !want.is_empty() && choices.iter().any(|c| c.eq_ignore_ascii_case(want)) { return want.to_string(); }
+    choices.first().cloned().unwrap_or_else(|| "monospace".into())
+}
+
+fn main() {
     // ---- CLI-only actions and single-instance forwarding (before any window exists)
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--install-shell") {
@@ -605,18 +608,10 @@ fn main() -> Result<(), slint::PlatformError> {
     if single {
         let cwd = std::env::current_dir().unwrap_or_default();
         let abs: Vec<PathBuf> = args.iter().map(|a| { let p = PathBuf::from(a); if p.is_absolute() { p } else { cwd.join(p) } }).collect();
-        if shell::forward(&abs) { return Ok(()); }
+        if shell::forward(&abs) { return; }
     }
 
-    if let Some(i) = args.iter().position(|a| a == "--acme-spike") {
-        let report = args.get(i + 1).map(PathBuf::from);
-        let family = detect_fonts().into_iter().find(|f| !BUNDLED_FONTS.contains(&f.as_str())).unwrap_or_else(|| "monospace".into());
-        ui::shell::run_spike(family, report);
-        return Ok(());
-    }
-
-    let ui = AppWindow::new()?;
-    dlg::set_main(ui.as_weak());
+    let ui = AppWindow::new();
     let mut cfg = settings::Settings::load();
     if cfg.spell {
         if let Err(e) = spell::available() {
@@ -624,213 +619,25 @@ fn main() -> Result<(), slint::PlatformError> {
             msg(&format!("無法啟用拼字檢查：{e}\n請確認拼字模組與程式位於同一資料夾。"));
         }
     }
+    let font_choices = detect_fonts();
+    let font_family = pick_font(&cfg.font_family, &font_choices);
     let st = State { docs: vec![Doc::new(1)], cur: 0, counter: 1, font: cfg.font.clamp(6.0, 48.0), wrap: cfg.wrap, line_numbers: cfg.line_numbers,
         preview: cfg.preview, overwrite: false, macro_rec: false, macro_play: false, macro_buf: cfg.macro_keys.clone(), dark: cfg.dark,
-        hits: vec![], font_family: if cfg.font_family.trim().is_empty() { "JetBrains Mono".into() } else { cfg.font_family.clone() },
-        font_choices: detect_fonts(), ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete,
+        hits: vec![], font_family, font_choices, ctx_tab: 0, views: Default::default(), split: false, active: 0, docmap: cfg.docmap, autocomplete: cfg.autocomplete,
         column_mode: false, prompt_kind: String::new(), file_hits: vec![], fif_rx: None, fif_cancel: Default::default(), fif_root: PathBuf::new(), rif_backups: vec![], rif: None,
         side_mode: cfg.sidebar.min(2), side_root: cfg.workspace.clone().filter(|p| p.is_dir()), side_expanded: cfg.workspace_expanded.iter().cloned().collect(),
         side_rows: vec![], side_syms: vec![], side_sym_key: (usize::MAX, 0), cfg };
     spell::set_ignored(&st.cfg.spell_ignore);
     editor::set_tab(st.cfg.tab_width);
-    let app = Rc::new(App { ui: ui.as_weak(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), preview_timer: Default::default(), idle: Default::default(),
+    let app = Rc::new(App { ui: ui.clone(), st: RefCell::new(st), me: RefCell::new(std::rc::Weak::new()), clip: RefCell::new(None), ai_key: RefCell::new(String::new()), ticker: Default::default(), preview_timer: Default::default(), idle: Default::default(),
         dirty: std::cell::Cell::new(true), rkey: RefCell::new([(0.0, 0.0, 0.0, 0.0); 2]) });
     *app.me.borrow_mut() = Rc::downgrade(&app);
     ui.set_version(env!("CARGO_PKG_VERSION").into());
     match credentials::load() {
-        Ok(Some(key)) => { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key.into()); ui.set_ai_key_status("已載入 NotEdit 儲存的金鑰".into()); }
-        Ok(None) => if let Ok(key) = std::env::var("OPENROUTER_API_KEY") { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key.into()); ui.set_ai_key_status("使用環境變數金鑰；可另行儲存到 NotEdit".into()); },
-        Err(e) => ui.set_ai_key_status(format!("無法讀取已儲存的金鑰：{e}").into()),
+        Ok(Some(key)) => { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key); ui.set_ai_key_status("已載入 NotEdit 儲存的金鑰".into()); }
+        Ok(None) => if let Ok(key) = std::env::var("OPENROUTER_API_KEY") { *app.ai_key.borrow_mut() = key.clone(); ui.set_ai_key(key); ui.set_ai_key_status("使用環境變數金鑰；可另行儲存到 NotEdit".into()); },
+        Err(e) => ui.set_ai_key_status(format!("無法讀取已儲存的金鑰：{e}")),
     }
-
-    macro_rules! cb { ($m:ident, |$a:ident $(, $p:ident : $t:ty)*| $body:block) => {{ let $a = app.clone(); ui.$m(move |$($p: $t),*| $body); }}; }
-    // Close open menus first and run the action after the next frame, so a modal
-    // dialog opened by the action never shows a stale menu behind it.
-    cb!(on_menu_action, |a, s: SharedString| {
-        let ui = a.ui();
-        if ui.get_open_menu() >= 0 || ui.get_ctx_visible() {
-            ui.set_open_menu(-1); ui.set_ctx_visible(false);
-            let w = Rc::downgrade(&a);
-            slint::Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = w.upgrade() { a.action(&s) } });
-        } else { a.action(&s) }
-    });
-    cb!(on_ai_save_key, |a| {
-        let ui = a.ui();
-        let key = ui.get_ai_key();
-        if key.trim().is_empty() { ui.set_ai_key_status("請先輸入金鑰".into()); return; }
-        match credentials::save(key.trim()) { Ok(()) => { *a.ai_key.borrow_mut() = key.trim().to_string(); ui.set_ai_key_status("已加密儲存金鑰".into()); }, Err(e) => ui.set_ai_key_status(format!("儲存金鑰失敗：{e}").into()) }
-    });
-    cb!(on_ai_use_key, |a| {
-        let ui = a.ui();
-        let key = ui.get_ai_key();
-        if key.trim().is_empty() { ui.set_ai_key_status("請先輸入金鑰".into()); return; }
-        *a.ai_key.borrow_mut() = key.trim().to_string();
-        ui.set_ai_key_status("金鑰僅用於本次執行，未變更已儲存金鑰".into());
-    });
-    cb!(on_ai_clear_key, |a| {
-        let ui = a.ui();
-        match credentials::clear() { Ok(()) => { a.ai_key.borrow_mut().clear(); ui.set_ai_key("".into()); ui.set_ai_key_status("已刪除儲存的金鑰".into()); }, Err(e) => ui.set_ai_key_status(format!("刪除金鑰失敗：{e}").into()) }
-    });
-    cb!(on_ai_send, |a| {
-        let ui = a.ui();
-        if ui.get_ai_running() { return; }
-        let key = a.ai_key.borrow().clone();
-        let model = ui.get_ai_model().trim().to_string();
-        let prompt = ui.get_ai_prompt().to_string();
-        let (role, role_name) = match ui.get_ai_role() {
-            1 => (agent::Role::Proofread, "校稿"),
-            2 => {
-                let language = match ui.get_ai_language() {
-                    0 => "繁體中文（台灣）".to_string(), 1 => "簡體中文".into(), 2 => "英文".into(), 3 => "日文".into(),
-                    4 => "韓文".into(), 5 => "越南文".into(), 6 => "泰文".into(), 7 => "印尼文".into(),
-                    8 => "法文".into(), 9 => "德文".into(), 10 => "西班牙文".into(),
-                    _ => ui.get_ai_language_custom().trim().to_string(),
-                };
-                if language.is_empty() { ui.set_ai_status("請輸入自訂翻譯語言".into()); return; }
-                (agent::Role::Translate(language), "翻譯")
-            }
-            3 => (agent::Role::Polish, "文字潤飾"), 4 => (agent::Role::Summarize, "摘要"),
-            5 => (agent::Role::Format, "格式整理"), _ => (agent::Role::General, "通用助手"),
-        };
-        let history = ui.get_ai_history().to_string();
-        let mode = ui.get_ai_mode();
-        let create_path = if mode == 1 {
-            let Some(path) = crate::dlg::file().set_title("AI 自動建立新檔（不覆蓋既有檔案）").add_filter("文件", &["md", "json", "txt"]).save_file() else { return; };
-            if path.exists() { ui.set_ai_status("檔案已存在，請選擇新檔名".into()); return; }
-            Some(path)
-        } else { None };
-        let document = (ui.get_ai_include_document() || mode == 2).then(|| a.text());
-        let target = if mode == 2 {
-            let st = a.st.borrow();
-            let d = &st.docs[st.views[st.view_idx()].doc];
-            let Some(path) = d.path.clone() else { ui.set_ai_status("自動修改前請先儲存目前文件".into()); return; };
-            if d.hex.is_some() { ui.set_ai_status("自動修改僅支援文字文件".into()); return; }
-            if file_watch::stamp(&path).ok() != d.disk_stamp { ui.set_ai_status("磁碟檔案已變更，請先重新載入後再執行".into()); return; }
-            let disk = match std::fs::read(&path) { Ok(bytes) => bytes, Err(e) => { ui.set_ai_status(format!("無法讀取原檔：{e}").into()); return; } };
-            let buffer = match encode(d) { Ok(bytes) => bytes, Err(e) => { ui.set_ai_status(e.into()); return; } };
-            Some((path, disk, buffer))
-        } else { None };
-        let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
-        ui.set_ai_running(true);
-        ui.set_ai_status("正在請求 OpenRouter...".into());
-        let weak = ui.as_weak();
-        std::thread::spawn(move || {
-            let result = agent::request(&key, &model, &prompt, &history, document.as_deref(), role);
-            let _ = weak.upgrade_in_event_loop(move |ui| {
-                ui.set_ai_running(false);
-                match result {
-                    Ok(text) => {
-                        ui.set_ai_history(format!("{history}\n使用者（{role_name}）：{prompt}\n助手：{text}\n").into());
-                        ui.set_ai_result(text.into());
-                        ui.set_ai_page(1);
-                        ui.set_ai_has_source(document.is_some());
-                        ui.set_ai_source(document.as_deref().unwrap_or_default().into());
-                        ui.set_ai_source_title(title.into());
-                        ui.set_ai_status("完成：請檢查內容後套用".into());
-                        APP.with(|slot| if let Some(app) = slot.borrow().clone() {
-                            let result_text = ui.get_ai_result().to_string();
-                            if let Some(path) = create_path {
-                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) && serde_json::from_str::<serde_json::Value>(&result_text).is_err() {
-                                    ui.set_ai_status("模型輸出的 JSON 無效，未建立檔案；請檢查預覽".into()); return;
-                                }
-                                match ai_files::create(&path, result_text.as_bytes()) {
-                                    Ok(()) => { app.open_path(path.clone()); ui.set_ai_status(format!("已建立：{}", path.display()).into()); }
-                                    Err(e) => ui.set_ai_status(format!("建立檔案失敗：{e}").into()),
-                                }
-                            } else if let Some((path, disk, buffer)) = target {
-                                let current = { let st = app.st.borrow(); let d = &st.docs[st.views[st.view_idx()].doc]; d.path.as_ref() == Some(&path) && document.as_deref() == Some(d.text().as_str()) };
-                                if !current || std::fs::read(&path).ok().as_deref() != Some(disk.as_slice()) {
-                                    ui.set_ai_status("文件已變更或切換，未自動修改；請重新送出".into()); return;
-                                }
-                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) && serde_json::from_str::<serde_json::Value>(&result_text).is_err() {
-                                    ui.set_ai_status("模型輸出的 JSON 無效，未修改檔案；請檢查預覽".into()); return;
-                                }
-                                match ai_files::backup(&path, &disk, &buffer) {
-                                    Ok((disk_backup, buffer_backup)) => {
-                                        if std::fs::read(&path).ok().as_deref() != Some(disk.as_slice()) {
-                                            ui.set_ai_status(format!("備份期間原檔已變更，未修改；備份：{}", disk_backup.display()).into()); return;
-                                        }
-                                        app.set_text(result_text);
-                                        let idx = app.cd();
-                                        if app.save(idx, false) { ui.set_ai_status(format!("已修改並儲存；備份：{}、{}", disk_backup.display(), buffer_backup.display()).into()); }
-                                        else { ui.set_ai_status(format!("儲存失敗；原檔及備份保留於 {}", disk_backup.display()).into()); }
-                                    }
-                                    Err(e) => ui.set_ai_status(format!("備份失敗，未修改文件：{e}").into()),
-                                }
-                            }
-                        });
-                    }
-                    Err(e) => ui.set_ai_status(e.into()),
-                }
-            });
-        });
-    });
-    cb!(on_ai_apply, |a, new_doc: bool| {
-        let ui = a.ui();
-        if !new_doc && ui.get_ai_has_source() {
-            let title = { let st = a.st.borrow(); st.docs[st.views[st.view_idx()].doc].title.clone() };
-            if title != ui.get_ai_source_title().as_str() || a.text() != ui.get_ai_source().as_str() {
-                ui.set_ai_status("文件已變更或切換，請重新送出以避免覆蓋變更".into()); return;
-            }
-        }
-        if !new_doc && a.is_hex(a.av()) { ui.set_ai_status("請先切換回文字模式".into()); return; }
-        if new_doc { a.action("new"); a.st.borrow_mut().active = 0; }
-        a.set_text(ui.get_ai_result().to_string());
-        ui.set_ai_status("已套用，可使用 Ctrl+Z 復原；請儲存文件".into());
-    });
-    cb!(on_ed_input, |a, v: i32, t: SharedString| { a.ed_input(v as usize & 1, &t) });
-    cb!(on_ed_mouse, |a, v: i32, k: i32, x: f32, y: f32, c: bool, s: bool, al: bool| { a.ed_mouse(v as usize & 1, k, x, y, c, s, al) });
-    cb!(on_ed_gutter, |a, v: i32, r: i32, f: bool, s: bool| { a.ed_gutter(v as usize & 1, r, f, s) });
-    cb!(on_ed_wheel, |a, v: i32, dx: f32, dy: f32, s: bool, c: bool| { a.ed_wheel(v as usize & 1, dx, dy, s, c) });
-    cb!(on_ed_vscroll, |a, v: i32, f: f32| { a.ed_vscroll(v as usize & 1, f) });
-    cb!(on_ed_hscroll, |a, v: i32, f: f32| { a.ed_hscroll(v as usize & 1, f) });
-    cb!(on_ed_ac_pick, |a, v: i32, i: i32| { a.accept_autocomplete(v as usize & 1, Some(i.max(0) as usize)) });
-    cb!(on_ed_map, |a, v: i32, f: f32| { a.ed_map(v as usize & 1, f) });
-    cb!(on_ed_focused, |a, v: i32| { a.ed_focused(v as usize & 1) });
-    {
-        let a = app.clone();
-        ui.on_tab_target(move |from: i32, dx: f32| a.tab_target(from.max(0) as usize, dx));
-    }
-    cb!(on_side_click, |a, i: i32| { a.side_click(i.max(0) as usize) });
-    cb!(on_side_activate, |a, i: i32| { a.side_activate(i.max(0) as usize) });
-    cb!(on_side_switch, |a, m: i32| { a.side_switch(m) });
-    cb!(on_side_open_folder, |a| { a.side_open_folder() });
-    {
-        let a = app.clone();
-        ui.on_custom_key(move |t: SharedString, c: bool, s: bool, al: bool| a.custom_key(&t, c, s, al));
-    }
-    cb!(on_tab_selected, |a, i: i32| { a.select_tab(i as usize) });
-    cb!(on_tab_close, |a, i: i32| { a.close(i as usize); });
-    cb!(on_find_next, |a, f: bool| { a.find(f); });
-    cb!(on_count_matches, |a| {
-        if let Some(re) = a.regex() { let c = re.find_iter(&a.text()).count(); a.ui().set_find_status(format!("計數：{} 個符合項目", c).into()); }
-    });
-    cb!(on_replace_one, |a| { a.replace(false) });
-    cb!(on_replace_all, |a| { a.replace(true) });
-    cb!(on_find_all, |a| { a.find_all() });
-    cb!(on_fif_browse, |a| { a.fif_browse() });
-    cb!(on_fif_run, |a| { a.fif_run() });
-    cb!(on_fif_stop, |a| { a.fif_stop() });
-    cb!(on_fif_replace_all, |a| { a.fif_replace() });
-    cb!(on_fif_replace_undo, |a| { a.fif_replace_undo() });
-    cb!(on_prompt_ok, |a, t: SharedString| { a.prompt_ok(&t) });
-    cb!(on_hit_clicked, |a, i: i32| { a.hit_clicked(i.max(0) as usize) });
-    cb!(on_context_request, |a, k: SharedString, i: i32| { a.context_menu(&k, i) });
-    cb!(on_rename_accepted, |a, t: SharedString| { a.rename(t.to_string()) });
-    cb!(on_tab_move, |a, f: i32, t: i32| { a.move_tab(f.max(0) as usize, t.max(0) as usize) });
-    {
-        let a = app.clone();
-        ui.on_ed_key(move |v: i32, t: SharedString, c: bool, s: bool, al: bool| a.ed_key(v as usize & 1, &t, c, s, al));
-    }
-    cb!(on_goto_line, |a, s: SharedString| {
-        let ui = a.ui();
-        if let Ok(n) = s.trim().parse::<usize>() {
-            let off = { let st = a.st.borrow(); let r = &st.docs[a.cd()].buf.rope; r.line_to_byte(n.saturating_sub(1).min(r.len_lines() - 1)) };
-            ui.set_goto_visible(false);
-            a.select_bytes(off, off);
-            ui.invoke_focus_editor();
-        }
-    });
 
     // open files passed on command line, otherwise restore last session
     // `--smoke-test <out-file>`: start the full UI, open the given files, write a
@@ -856,120 +663,106 @@ fn main() -> Result<(), slint::PlatformError> {
     if single {
         // files opened later from Explorer / the file manager arrive here
         shell::listen(|paths| {
-            let _ = slint::invoke_from_event_loop(move || APP.with(|a| if let Some(app) = a.borrow().clone() {
+            ui::dispatch::invoke_from_event_loop(move || APP.with(|a| if let Some(app) = a.borrow().clone() {
                 for p in paths { app.open_arg(p); }
                 app.refresh_all();
-                app.ui().window().with_winit_window(|w| { w.set_minimized(false); w.focus_window(); });
+                app.ui().request_focus_window();
             }));
         });
     }
     if smoke.is_none() { app.restore_recovery(); } // a modal recovery prompt would block the smoke test
     app.apply_theme();
     app.refresh_all();
-
-    // drag & drop files from the OS
-    {
-        let a = app.clone();
-        let pending: Rc<RefCell<Vec<PathBuf>>> = Default::default();
-        ui.window().on_winit_window_event(move |_w, ev| {
-            if let winit::event::WindowEvent::DroppedFile(p) = ev {
-                pending.borrow_mut().push(p.clone());
-                let (a, pending) = (a.clone(), pending.clone());
-                // defer: the event filter must not re-enter the UI synchronously
-                slint::Timer::single_shot(std::time::Duration::from_millis(0), move || {
-                    let files: Vec<PathBuf> = pending.borrow_mut().drain(..).collect();
-                    for f in files { if f.is_file() { a.open_path(f); } }
-                });
-            }
-            EventResult::Propagate
-        });
-    }
-
     app.kick();
-    cb!(on_layout_changed, |a| { a.kick() });
 
     // Periodically journal only modified buffers. Recovery never writes source
     // files; it is removed after a clean exit or once every buffer is saved.
     let ar = app.clone();
-    let recovery_timer = slint::Timer::default();
-    recovery_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || ar.persist_recovery());
+    let recovery_timer = Timer::default();
+    recovery_timer.start(TimerMode::Repeated, std::time::Duration::from_secs(10), move || ar.persist_recovery());
 
     let aw = app.clone();
-    let file_watch_timer = slint::Timer::default();
-    file_watch_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(2), move || aw.check_external_changes());
+    let file_watch_timer = Timer::default();
+    file_watch_timer.start(TimerMode::Repeated, std::time::Duration::from_secs(2), move || aw.check_external_changes());
 
-    let a2 = app.clone();
-    ui.window().on_close_requested(move || if a2.confirm_exit() { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown });
-    let _smoke_timer = slint::Timer::default();
+    let _smoke_timer = Timer::default();
     if let Some(out) = smoke {
         let a = app.clone();
-        _smoke_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(1500), move || {
-            let ui = a.ui();
-            a.action("side:2");
-            // Exercise the real input callbacks; timings cover handlers, not GPU frames.
-            let mut interaction = String::new();
-            if !a.is_hex(0) {
-                let before = ui.get_v0().rows;
-                let tokens: Vec<_> = before.iter().map(|r| r.toks).collect();
-                let version = { let st = a.st.borrow(); st.docs[st.views[0].doc].buf.version };
-                let (_, lh) = a.metrics();
-                let mut timings = Vec::new();
-                for i in 0..40 {
-                    let y = (i % before.row_count().max(1).min(10)) as f32 * lh + lh / 2.0;
-                    let start = Instant::now();
-                    ui.invoke_ed_mouse(0, 0, 24.0, y, false, false, false);
-                    ui.invoke_ed_mouse(0, 1, 64.0, y, false, false, false);
-                    ui.invoke_ed_mouse(0, 2, 64.0, y, false, false, false);
-                    timings.push(start.elapsed().as_micros());
-                }
-                timings.sort_unstable();
-                let after = ui.get_v0().rows;
-                let reused = tokens.iter().zip(after.iter()).filter(|(old, row)| **old == row.toks).count();
-                assert_eq!(before, after, "clicks must retain the row model");
-                assert_eq!(reused, tokens.len(), "clicks must retain text models");
-                { let st = a.st.borrow(); assert_eq!(version, st.docs[st.views[0].doc].buf.version); }
-                interaction = format!("INPUT_CALLBACKS_OK gestures=40 text_models_reused={reused} handler_median_us={} handler_p95_us={}\n", timings[20], timings[37]);
-            }
-            let report = {
-                let st = a.st.borrow();
-                let sz = ui.window().size();
-                format!("NOTEDIT_SMOKE_OK version={} docs={} first={} lines={} symbols={} window={}x{} scale={}\n{interaction}",
-                    env!("CARGO_PKG_VERSION"), st.docs.len(), st.docs[0].title, st.docs[0].buf.rope.len_lines(), st.side_syms.len(),
-                    sz.width, sz.height, ui.window().scale_factor())
-            };
-            let report = if std::env::var_os("NOTEDIT_SPELL_SMOKE").is_some() {
-                let result = spell::available().is_ok() && spell::check("hello") && !spell::check("helo") && spell::suggest("helo").iter().any(|s| s == "hello");
-                format!("{report}{}\n", if result { "SPELL_MODULE_OK" } else { "SPELL_MODULE_FAILED" })
-            } else { report };
-            if std::env::var_os("NOTEDIT_PREVIEW_SMOKE").is_some() && ui.get_show_preview() {
-                a.select_bytes(0, 0);
-                let before = ui.get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
-                let baseline = std::env::var_os("NOTEDIT_PREVIEW_BASELINE").is_some();
-                let start = Instant::now();
-                for _ in 0..10 {
-                    ui.invoke_ed_input(0, "x".into());
-                    if baseline { a.refresh_preview(); }
-                }
-                let input_us = start.elapsed().as_micros();
-                let during = ui.get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
-                let a = a.clone();
-                let out = out.clone();
-                slint::Timer::single_shot(Duration::from_millis(400), move || {
-                    let after = a.ui().get_preview_blocks().row_data(0).map(|b| b.text.to_string()).unwrap_or_default();
-                    let result = if baseline && during != before && after == during && after.contains("xxxxxxxxxx") { "PREVIEW_BASELINE_OK" }
-                        else if !baseline && during == before && after != before && after.contains("xxxxxxxxxx") { "PREVIEW_DEBOUNCE_OK" }
-                        else { "PREVIEW_SMOKE_FAILED" };
-                    let _ = std::fs::write(&out, format!("{report}{result} edits=10 input_us={input_us}\n"));
-                    let _ = slint::quit_event_loop();
-                });
-                return;
-            }
-            let _ = std::fs::write(&out, report);
-            let _ = slint::quit_event_loop();
-        });
+        _smoke_timer.start(TimerMode::SingleShot, Duration::from_millis(1500), move || smoke_test(&a, out.clone()));
     }
-    let r = ui.run();
+    let r = ui::shell::run(app.clone());
+    drop((recovery_timer, file_watch_timer, _smoke_timer));
     if single { shell::release(); }
     APP.with(|a| a.borrow_mut().take());
-    r
+    if let Err(e) = r {
+        eprintln!("NotEdit: {e}");
+        msg(&format!("無法建立視窗：{e}"));
+        std::process::exit(1);
+    }
+}
+
+/// `--smoke-test`: exercise the real input handlers and write a report.
+/// `NOTEDIT_SCREENSHOT=<file.png>` additionally saves a CPU-rendered frame.
+fn smoke_test(a: &Rc<App>, out: PathBuf) {
+    let ui = a.ui();
+    a.action("side:2");
+    // Exercise the real input handlers; timings cover handlers, not GPU frames.
+    let mut interaction = String::new();
+    if !a.is_hex(0) {
+        let rows_before = ui.view_state(0).rows.len();
+        let version = { let st = a.st.borrow(); st.docs[st.views[0].doc].buf.version };
+        let (_, lh) = a.metrics();
+        let mut timings = Vec::new();
+        for i in 0..40 {
+            let y = (i % rows_before.max(1).min(10)) as f32 * lh + lh / 2.0;
+            let start = Instant::now();
+            a.ed_mouse(0, 0, 24.0, y, false, false, false);
+            a.ed_mouse(0, 1, 64.0, y, false, false, false);
+            a.ed_mouse(0, 2, 64.0, y, false, false, false);
+            timings.push(start.elapsed().as_micros());
+        }
+        timings.sort_unstable();
+        let rows_after = ui.view_state(0).rows.len();
+        assert_eq!(rows_before, rows_after, "clicks must not change the visible rows");
+        assert!(rows_after > 0, "the editor must render rows");
+        { let st = a.st.borrow(); assert_eq!(version, st.docs[st.views[0].doc].buf.version); }
+        interaction = format!("INPUT_CALLBACKS_OK gestures=40 rows={rows_after} handler_median_us={} handler_p95_us={}\n", timings[20], timings[37]);
+    }
+    let report = {
+        let st = a.st.borrow();
+        let scale = ui.get_scale();
+        format!("NOTEDIT_SMOKE_OK version={} docs={} first={} lines={} symbols={} window={}x{} scale={}\n{interaction}",
+            env!("CARGO_PKG_VERSION"), st.docs.len(), st.docs[0].title, st.docs[0].buf.rope.len_lines(), st.side_syms.len(),
+            (ui.get_win_w() * scale).round(), (ui.get_win_h() * scale).round(), scale)
+    };
+    let report = if std::env::var_os("NOTEDIT_SPELL_SMOKE").is_some() {
+        let result = spell::available().is_ok() && spell::check("hello") && !spell::check("helo") && spell::suggest("helo").iter().any(|s| s == "hello");
+        format!("{report}{}\n", if result { "SPELL_MODULE_OK" } else { "SPELL_MODULE_FAILED" })
+    } else { report };
+    if let Some(p) = std::env::var_os("NOTEDIT_SCREENSHOT") { ui.request_screenshot(PathBuf::from(p)); }
+    if std::env::var_os("NOTEDIT_PREVIEW_SMOKE").is_some() && ui.get_show_preview() {
+        a.select_bytes(0, 0);
+        let first = |ui: &AppWindow| ui.preview_blocks_ref().first().map(|b| b.text.clone()).unwrap_or_default();
+        let before = first(&ui);
+        let baseline = std::env::var_os("NOTEDIT_PREVIEW_BASELINE").is_some();
+        let start = Instant::now();
+        for _ in 0..10 {
+            a.ed_input(0, "x");
+            if baseline { a.refresh_preview(); }
+        }
+        let input_us = start.elapsed().as_micros();
+        let during = first(&ui);
+        let a = a.clone();
+        Timer::single_shot(Duration::from_millis(400), move || {
+            let after = first(&a.ui());
+            let result = if baseline && during != before && after == during && after.contains("xxxxxxxxxx") { "PREVIEW_BASELINE_OK" }
+                else if !baseline && during == before && after != before && after.contains("xxxxxxxxxx") { "PREVIEW_DEBOUNCE_OK" }
+                else { "PREVIEW_SMOKE_FAILED" };
+            let _ = std::fs::write(&out, format!("{report}{result} edits=10 input_us={input_us}\n"));
+            a.ui().request_quit();
+        });
+        return;
+    }
+    let _ = std::fs::write(&out, report);
+    ui.request_quit();
 }

@@ -77,7 +77,7 @@ impl App {
             let mut asc = String::new();
             for (j, &b) in bytes.iter().enumerate() {
                 let color = if b == 0 { dim } else if (0x20..0x7f).contains(&b) { fg } else { hi };
-                toks.push(EdTok { x: hex_col(j) as f32 * cw, text: format!("{b:02X}").into(), color: sc(color), bold: false, italic: false });
+                toks.push(EdTok { x: hex_col(j) as f32 * cw, text: format!("{b:02X}").into(), color, bold: false, italic: false });
                 asc.push(crate::hex::ascii(b));
                 let p = off + j as u64;
                 if let Some((s, e)) = sel { if p >= s && p < e {
@@ -85,7 +85,7 @@ impl App {
                     rects.push(EdRect { x: (ASCII_COL + j) as f32 * cw, w: cw, kind: 0 });
                 } }
             }
-            if !asc.is_empty() { toks.push(EdTok { x: ASCII_COL as f32 * cw, text: asc.into(), color: sc(fg), bold: false, italic: false }); }
+            if !asc.is_empty() { toks.push(EdTok { x: ASCII_COL as f32 * cw, text: asc.into(), color: fg, bold: false, italic: false }); }
             if r == cur_row {
                 let j = (h.cur - off) as usize;
                 // caret in the active column, box in the other one
@@ -94,8 +94,8 @@ impl App {
                 rects.push(EdRect { x: bx, w: bw, kind: 5 });
                 carets.push(EdCaret { x: cx, y: i as f32 * lh });
             }
-            rows.push(EdRow { num: crate::hex::offset_label(off, wide).into(), line: r as i32, fold: 0, cur: r == cur_row, mark: false, diff: 0,
-                              toks: ModelRc::new(VecModel::from(toks)), rects: ModelRc::new(VecModel::from(rects)) });
+            rows.push(EdRow { num: crate::hex::offset_label(off, wide), line: r as i32, fold: 0, cur: r == cur_row, mark: false, diff: 0,
+                              toks, rects });
         }
         if !active { carets.clear(); }
         let nrows = h.rows();
@@ -104,10 +104,10 @@ impl App {
         let title = if st.split { format!("{}{} [HEX]", if d.modified { "● " } else { "" }, d.title) } else { String::new() };
         let _ = w;
         let state = EdState {
-            rows: ModelRc::new(VecModel::from(rows)), carets: ModelRc::new(VecModel::from(carets)),
+            rows, carets,
             gutter_w, num_w, thumb_pos, thumb_size, hthumb_pos: 0.0, hthumb_size: 1.0, hbar: false,
-            ac_items: ModelRc::new(VecModel::from(Vec::<SharedString>::new())), ac_sel: 0, ac_visible: false,
-            title: title.into(), map_lines: ModelRc::new(VecModel::from(Vec::<MapLine>::new())), map_view_y: 0.0, map_view_h: 0.0,
+            ac_items: Vec::new(), ac_sel: 0, ac_visible: false,
+            title, map_lines: Vec::new(), map_view_y: 0.0, map_view_h: 0.0,
         };
         drop(st);
         if vi == 0 { ui.set_v0(state); } else { ui.set_v1(state); }
@@ -138,7 +138,7 @@ impl App {
         let lk = k.to_ascii_lowercase();
         if alt && !ctrl && (lk == 'h' || lk == 'c') {
             let name = if lk == 'h' { "textmode" } else { "columnmode" };
-            if let Some(me) = self.me.borrow().upgrade() { slint::Timer::single_shot(std::time::Duration::from_millis(0), move || me.action(name)); }
+            if let Some(me) = self.me.borrow().upgrade() { Timer::single_shot(std::time::Duration::from_millis(0), move || me.action(name)); }
             return true;
         }
         if ctrl {

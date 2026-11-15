@@ -44,7 +44,7 @@ impl App {
             ui.set_hits_title(format!("搜尋「{}」：在 {} 個文件中找到 {} 筆", ui.get_find_text(), st.docs.len(), rows.len()).into());
         }
         { let mut st = self.st.borrow_mut(); st.hits = hits; st.file_hits.clear(); }
-        ui.set_hits(ModelRc::new(VecModel::from(rows)));
+        ui.set_hits(rows);
         ui.set_hits_visible(true);
     }
 
@@ -151,7 +151,7 @@ impl App {
                  chk(if st.split { "關閉分割檢視" } else { "複製到另一個檢視 (分割)" }, "", "split", st.split), sep(),
                  chk(if st.preview { "關閉預覽" } else { "開啟預覽" }, "", "preview", false)]).map(|mut m| { if m.action == "preview" { m.enabled = pv; } m }).collect()
         };
-        ui.set_ctx_items(ModelRc::new(VecModel::from(items)));
+        ui.set_ctx_items(items);
         ui.set_ctx_visible(true);
     }
 
@@ -270,7 +270,7 @@ impl App {
             "close" => { self.close(cur); }
             "closeall" => { while self.st.borrow().docs.len() > 1 || self.st.borrow().docs[0].modified || self.st.borrow().docs[0].path.is_some() { let i = self.st.borrow().docs.len() - 1; if !self.close(i) { break; } } }
             "closeothers" => { let mut i = self.st.borrow().docs.len(); while i > 0 { i -= 1; if i != self.st.borrow().cur { if !self.close(i) { break; } } } }
-            "exit" => { if self.confirm_exit() { let _ = slint::quit_event_loop(); } }
+            "exit" => { if self.confirm_exit() { ui.request_quit(); } }
             "undo" | "redo" | "gotobrace" | "print" | "exporthtml" | "bookmark" | "nextbm" | "prevbm" | "clearbm" | "zoomin" | "zoomout" => self.action_plain(a),
             "split" => self.toggle_split(),
             "openworkspace" => self.side_open_folder(),
@@ -325,7 +325,7 @@ impl App {
                 if !self.st.borrow().macro_rec {
                     let n = if a == "macroplay" { 1 } else { 10 };
                     let me = self.clone();
-                    slint::Timer::single_shot(std::time::Duration::from_millis(0), move || me.play_macro(n));
+                    Timer::single_shot(std::time::Duration::from_millis(0), move || me.play_macro(n));
                     return;
                 }
             }
