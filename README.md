@@ -1,12 +1,12 @@
 # NotEdit
 
-以 **Rust + [Slint](https://slint.dev)** 製作的類 Notepad++ 文字編輯器，內建簡易 **HTML / Markdown 預覽**。介面為繁體中文。
+以 **Rust + [AcmeUI-Native](https://github.com/stevenke1981/AcmeUI-Native)** 製作的類 Notepad++ 文字編輯器，內建簡易 **HTML / Markdown 預覽**。介面為繁體中文。
 
 ## 下載
 
 請至 **[Releases 頁面](https://github.com/stevenke1981/notedit/releases/latest)** 下載最新版本：
 
-- Windows：`notedit-windows-x64.zip`（解壓後執行 `notedit.exe`）
+- Windows：`NotEdit-<版本>-windows-x64-setup.exe` 安裝程式，或 `notedit-windows-x64.zip` 免安裝版（完整解壓後執行 `notedit.exe`；`notedit_spell.dll` 須與執行檔放在同一資料夾，供英文拼字檢查使用）
 - Linux：`notedit-linux-x64.tar.gz`
 - macOS (Apple Silicon)：`notedit-macos-arm64.tar.gz`
 
@@ -50,6 +50,8 @@
 - **macOS**：尚不支援 Finder 右鍵選單（需要 .app 套件與 Finder 擴充功能），請用「打開檔案的應用程式」或把檔案拖進視窗
 - **單一執行個體**：NotEdit 已在執行時，再次開啟的檔案（包含檔案總管多選後一次開啟多個）會送到既有視窗開成新分頁並把視窗帶到前景；資料夾參數會開成工作區。使用 `--new-instance` 可強制開新視窗。轉送只走本機 127.0.0.1，並以隨機權杖驗證
 - 命令列可一次傳入多個檔案與資料夾：`notedit a.txt b.rs 專案資料夾`
+- Windows 安裝程式預設替目前使用者加入檔案與資料夾右鍵選單，可在安裝時取消勾選；解除安裝會移除安裝程式建立的選單。Windows 11 請在右鍵選單中選「顯示其他選項」。安裝不需要系統管理員權限。
+- 建立 Windows 安裝程式：安裝 Rust、MSVC C++ Redistributable 和 Inno Setup 6 或 7，執行 `powershell -File scripts/package-windows.ps1`；成品在 `target/release/installer/`。安裝程式隨附應用程式所需的 VC 執行階段 DLL；應定期重新打包以更新該 DLL。
 
 ### v0.6.0
 
@@ -86,10 +88,12 @@
 
 - **在檔案中取代**（搜尋 → 在檔案中取代）：資料夾、檔案類型篩選、子資料夾、規則運算式（取代字串可用 `$1` 群組）；「預覽」先在結果面板列出所有符合處，「全部取代」會列出檔案與次數並要求確認後才寫入；已開啟的文件只在編輯器中修改（Ctrl+Z 可復原，尚未存檔），其他檔案先備份為 `.bak` 再寫入，保留原本的編碼、BOM 與換行符號，可用「復原檔案取代」一鍵還原；略過二進位檔與超過 64 MB 的檔案
 - **JSON / XML 格式化與壓縮**（轉換選單）：保留鍵的順序與內容；格式錯誤時顯示行號與欄號（例如「JSON 格式錯誤：第 3 行，第 6 欄」、「</a> 與第 2 行的 <b> 不對應」）；有選取時只處理選取範圍
+- **Markdown 清單編輯**：在清單項目行尾按 Enter，自動延續無序清單、遞增有序清單及建立未勾選的工作項目；空項目按 Enter 可結束清單，程式碼區塊不會自動延續。
+- **JSON 縮排**：Tab 與區塊縮排使用四個空格，方便維持一致縮排，也避免在字串內插入未跳脫的定位字元；標準 JSON 不提供註解命令。
 - **打字機模式**（設定 → 打字機模式）：游標所在行保持在視窗垂直中央
 - **修改標記**：復原 / 取消復原回到上次存檔的內容時，分頁與標題列的修改標記會自動清除
 - 自動完成清單開啟時按右鍵，會關閉清單並正常顯示右鍵選單
-- **閒置 CPU 降低**：沒有變化時停止 30 ms 更新計時器，游標改用 Slint 內建的閃爍游標，不再有額外的重繪計時器（在無 GPU 的軟體繪圖環境中，閒置 CPU 由約 12% 降到約 6%；有 GPU 時幾乎為 0）
+- **閒置 CPU 降低**：沒有變化時停止 30 ms 更新計時器，閒置約 10 秒後游標停止閃爍，不再重繪（無 GPU 時自動改用 CPU 軟體繪圖）
 - 自動備份 / 當機還原：未存檔的文件會定期寫入還原日誌，異常結束後再次啟動時可還原
 
 ### v0.4.0：MadEdit 功能
@@ -102,7 +106,7 @@
 - **轉換選單**：繁體 ↔ 簡體（OpenCC 詞彙轉換，如「軟體 ↔ 软件」）、全形 ↔ 半形、Tab ↔ 空白、字首大寫、大小寫互換、移除行首（及行尾）空白、合併行、刪除空行（含只有空白的行）、遞減排序、移除重複行、插入遞增數字、欄位對齊、複製為十六進位字串 / 還原十六進位字串（接受 `4D6F64`、`4D 6F 64`、`%4D%6F%64`、`4D,6F,64`）；有選取時只轉換選取範圍
 - **字數統計**（工具 → 字數統計）：中日韓文字每字計一個字，另列字元、空白、中日韓、半形 / 全形、行數、位元組
 - **在檔案中尋找**（搜尋 → 在檔案中尋找，Ctrl+Shift+F）：資料夾、檔案類型篩選（`*.rs;*.md`）、包含子資料夾、規則運算式 / 大小寫 / 全字；背景執行可停止，結果即時加入結果面板，點擊即開啟檔案並跳至該處（略過 .git、target、node_modules 與二進位檔）
-- **拼字檢查**（檢視 → 拼字檢查）：內建 en_US Hunspell 字典（spellbook），純文字 / Markdown 中錯字加紅色底線，右鍵選單提供建議字與「忽略」（忽略清單會保存）
+- **拼字檢查**（檢視 → 拼字檢查）：使用 en_US Hunspell 字典（spellbook），純文字 / Markdown 中錯字加紅色底線，右鍵選單提供建議字與「忽略」（忽略清單會保存）。Windows 的字典和引擎位於 `notedit_spell.dll`；缺少或版本不符時會提示，其他編輯功能仍可使用。
 
 ### 既有功能
 
@@ -118,7 +122,7 @@
 - **TOML 語法上色**
 - **拖放**：從檔案總管把檔案拖進視窗即可開啟；分頁可拖曳排序；滑鼠拖曳選取文字
 - **選單列**：檔案、編輯、搜尋、檢視、編碼、語言、設定、工具、巨集、執行、外掛、視窗、?
-- **工具列**：SVG 圖示（ui/icons）與滑鼠提示
+- **工具列**：文字 / Unicode 符號按鈕與滑鼠提示
 - **多分頁**：分頁顯示修改狀態（● / ○），可點 ✕ 關閉、拖曳排序，Ctrl+Tab 切換
 - **檔案**：開新、開啟（多選、命令列、拖放）、重新載入、儲存、另存、全部儲存、關閉 / 全部關閉 / 關閉其他、**最近開啟的檔案**清單、**匯出為 HTML**（含語法上色）、**列印**（以瀏覽器開啟可列印頁面，Ctrl+P）
 - **工作階段還原**：重新啟動時自動開回上次的檔案與游標位置（可在「設定」關閉）
@@ -129,14 +133,14 @@
 - **目前行醒目提示**、**對應括號醒目提示**
 - **深色主題**（介面 + 語法配色）
 - **巨集**：錄製（Ctrl+Shift+R）/ 播放（Ctrl+Shift+P）/ 重複 10 次，會錄製文字、方向鍵 / Shift 選取、Ctrl 快速鍵與選單動作，巨集會保存
-- **檢視**：行號、自動換行、縮放（Ctrl + + / − / 0）、HTML/Markdown 預覽窗格
+- **檢視**：行號、自動換行、縮放（Ctrl + + / − / 0）、HTML/Markdown 預覽窗格；連續輸入時合併預覽更新，停止輸入約 180 毫秒後重新整理
 - **編碼**：自動偵測（BOM / UTF-8 / chardetng），支援 UTF-8、UTF-8-BOM、UTF-16 LE/BE、Big5、GBK、Shift-JIS、Windows-1252
 - **換行格式**：自動偵測 CRLF / LF / CR，可轉換
 - **語言**：依副檔名辨識約 19 種語言，可手動切換
 - **狀態列**：檔案類型、length / lines、Ln / Col / Pos / Sel、換行格式、編碼、INS/OVR、巨集錄製指示
 - **程式圖示**：視窗圖示與 Windows exe 圖示
 - **右鍵選單**：編輯區（復原/取消復原、剪下/複製/貼上/刪除、全選、大小寫、複製/刪除行、註解/取消註解 Ctrl+Q、搜尋選取文字、預覽）與分頁（關閉/關閉其他/關閉左側/右側、儲存、另存、重新命名、複製完整路徑/檔名、開啟所在資料夾），不可用項目會變灰
-- **字型**：預設為內嵌的 **JetBrains Mono**（SIL OFL 授權），另內嵌 DejaVu Sans Mono；「設定」選單可切換，並自動列出系統已安裝的 Cascadia Code、Consolas、Fira Code、Source Code Pro 等程式字型，選擇會保存。中文字由系統字型自動補字（Windows：微軟正黑體；Linux：Noto Sans CJK）
+- **字型**：使用系統已安裝的程式字型（預設為第一個找到的 Cascadia Code、Cascadia Mono、Consolas、Fira Code、Source Code Pro 等；都沒有時使用系統等寬字型）；「設定」選單可切換，選擇會保存。中文字由系統字型自動補字（Windows：微軟正黑體；Linux：Noto Sans CJK）
 
 ## 建置
 
@@ -145,7 +149,9 @@ cargo build --release
 ./target/release/notedit [檔案...]
 ```
 
-Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`。
+Windows 編譯會在 `target/release/` 同時產生 `notedit.exe` 及 `notedit_spell.dll`。複製或發布時請保留兩者在同一資料夾，並附上字典與字型授權檔；Linux 和 macOS 仍使用編入主程式的拼字引擎。
+
+Linux 需安裝：`libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev`（與 CI 相同；GTK 供檔案對話框使用）。
 
 推送 `v*` 標籤時，GitHub Actions 會自動建置 Windows / Linux / macOS 並發佈到 Releases。
 
@@ -166,6 +172,24 @@ NotEdit 會以目前 Notepad++ 的實際能力作為功能對照，而不是只�
 - 編輯器以等寬字格排版；比例字型或連字（ligature）不會依實際寬度顯示
 - 列印透過瀏覽器的列印功能；預覽為簡化版（不支援 CSS、圖片）
 
+### 已知差異（AcmeUI 移植後）
+
+- 不再載入內嵌的 JetBrains Mono / DejaVu 字型，編輯區使用系統等寬字型；字型缺少粗體 / 斜體字面時改以一般字面顯示
+- 工具列改用文字符號，不再使用 SVG 圖示
+- AI 助手的指令欄為單行輸入（Enter 送出）；回覆在套用前為唯讀，無法先在預覽中修改
+- 對話框在深色模式下仍維持淺色外觀
+- 彈出選單以細邊與淺陰影代替模糊陰影
+
+## AI 文件助手
+
+按工具列的「AI 助手」或「工具 → AI 文件助手」，即可在文件右側開啟或收合助手，並在「對話」、「結果」及「設定」分頁操作。預設使用 `openrouter/free`；也可輸入以 `:free` 結尾的免費模型。在「設定 → OpenRouter API 金鑰」輸入金鑰，按「儲存金鑰」後，Windows 會使用目前登入帳戶的 DPAPI 加密，儲存在 NotEdit 設定目錄的 `openrouter-key.dpapi`，下次啟動優先讀取此金鑰；沒有已儲存金鑰時才使用 `OPENROUTER_API_KEY` 環境變數。也可選擇「本次使用」而不儲存，或刪除已儲存金鑰。其他平台目前僅支援本次使用或環境變數。請自行確認 OpenRouter 帳號的免費模型使用限制。
+
+勾選「傳送目前文件內容」後，文件文字會連同指令傳送至 OpenRouter。先前對話也會在後續請求中送出，可按「清除對話」清空。模型回覆會先顯示在唯讀的預覽欄（可套用後在編輯器中修改）；選擇套用到目前文件或建立新文件，再以一般儲存操作寫入磁碟。套用可使用 Ctrl+Z 復原。如果傳送後原文件已變更或切換，需重新送出後才能覆寫。請檢查產生的內容及 JSON 格式，模型可能產生錯誤。
+
+對話分頁可選擇通用助手、校稿、翻譯、文字潤飾、摘要或格式整理。勾選傳送文件後，即使指令欄空白也可執行所選角色；選擇翻譯後可在「翻譯語言」選擇目標語言，或選擇自訂語言；預設為台灣繁體中文。
+
+可選擇「僅預覽」、「自動建立新檔」或「自動備份並修改目前檔案」。自動建立會在送出前選擇路徑，並拒絕覆蓋現有檔案；自動修改會傳送目前文件，並在寫入前將磁碟原檔及編輯器當下內容分別備份至原檔旁的 `.disk.bak` 與 `.buffer.bak` 檔案。自動修改需要先儲存文件；請求期間若文件或磁碟原檔變更，會停止修改並保留回覆供檢視。自動寫入 `.json` 前會檢查 JSON 語法。請定期自行管理備份檔案。
+
 ## 授權
 
-MIT License，詳見 [LICENSE](LICENSE)。拼字字典 en_US 來自 SCOWL / wooorm/dictionaries（`assets/dict/LICENSE-en_US.txt`）；繁簡轉換使用 ferrous-opencc（Apache-2.0）。內嵌字型：JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）、DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`）。
+MIT License，詳見 [LICENSE](LICENSE)。拼字字典 en_US 來自 SCOWL / wooorm/dictionaries（`assets/dict/LICENSE-en_US.txt`）；繁簡轉換使用 ferrous-opencc（Apache-2.0）。`ui/fonts` 保留先前內嵌的 JetBrains Mono（SIL Open Font License 1.1，`ui/fonts/LICENSE-JetBrainsMono-OFL.txt`）與 DejaVu Sans Mono（`ui/fonts/LICENSE-DejaVu.txt`），目前版本未載入。

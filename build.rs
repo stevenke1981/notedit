@@ -1,5 +1,4 @@
 fn main() {
-    slint_build::compile("ui/app.slint").unwrap();
     #[cfg(windows)]
     {
         let mut res = winresource::WindowsResource::new();

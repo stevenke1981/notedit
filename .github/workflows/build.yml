@@ -34,13 +34,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgtk-3-dev xvfb
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev xvfb
       - name: Test
         run: cargo test --release --locked
       - name: Build
         run: cargo build --release --locked
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
+        env:
+          ACME_RENDER_BACKEND: cpu
         run: |
           echo '{"restore_session":false}' > "$RUNNER_TEMP/cfg.json"
           NOTEDIT_CONFIG="$RUNNER_TEMP/cfg.json" timeout 60 xvfb-run -a target/release/notedit --smoke-test "$RUNNER_TEMP/smoke.txt" src/workspace.rs
@@ -48,6 +50,8 @@ jobs:
       - name: Smoke test (macOS)
         if: runner.os == 'macOS'
         continue-on-error: true
+        env:
+          ACME_RENDER_BACKEND: cpu
         run: |
           echo '{"restore_session":false}' > "$RUNNER_TEMP/cfg.json"
           NOTEDIT_CONFIG="$RUNNER_TEMP/cfg.json" target/release/notedit --smoke-test "$RUNNER_TEMP/smoke.txt" src/workspace.rs &
@@ -56,21 +60,26 @@ jobs:
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          ACME_RENDER_BACKEND: cpu
         run: |
           '{"restore_session":false}' | Set-Content "$env:RUNNER_TEMP\cfg.json"
           $env:NOTEDIT_CONFIG = "$env:RUNNER_TEMP\cfg.json"
+          $env:NOTEDIT_SPELL_SMOKE = "1"
           $p = Start-Process -FilePath target\release\notedit.exe -ArgumentList "--smoke-test","$env:RUNNER_TEMP\smoke.txt","src\workspace.rs" -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "smoke test timed out" }
           Get-Content "$env:RUNNER_TEMP\smoke.txt"
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern NOTEDIT_SMOKE_OK -Quiet)) { throw "smoke test failed" }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern SPELL_MODULE_OK -Quiet)) { throw "spell module test failed" }
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $d = "${{ matrix.name }}"
           New-Item -ItemType Directory $d | Out-Null
-          Copy-Item target/release/${{ matrix.bin }}, README.md, LICENSE, ui/fonts/LICENSE-DejaVu.txt, ui/fonts/LICENSE-JetBrainsMono-OFL.txt $d
+          Copy-Item target/release/${{ matrix.bin }}, target/release/notedit_spell.dll, README.md, LICENSE, assets/dict/LICENSE-en_US.txt, ui/fonts/LICENSE-DejaVu.txt, ui/fonts/LICENSE-JetBrainsMono-OFL.txt $d
           Compress-Archive -Path $d -DestinationPath "$d.zip"
+          ./scripts/package-windows.ps1 -SkipBuild
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -85,6 +94,7 @@ jobs:
           path: |
             ${{ matrix.name }}.zip
             ${{ matrix.name }}.tar.gz
+            target/release/installer/*.exe
           if-no-files-found: error
 
   release:

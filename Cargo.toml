@@ -5,13 +5,22 @@ version = "0.7.1"
 edition = "2021"
 rust-version = "1.92"
 
+[workspace]
+members = ["modules/spell"]
+default-members = [".", "modules/spell"]
+resolver = "2"
+
 [dependencies]
+acme-core = { git = "https://github.com/stevenke1981/AcmeUI-Native", rev = "a3e758852b77c7e94c344a267c55d7cb7441c965" }
+acme-platform = { git = "https://github.com/stevenke1981/AcmeUI-Native", rev = "a3e758852b77c7e94c344a267c55d7cb7441c965" }
+acme-render-cpu = { git = "https://github.com/stevenke1981/AcmeUI-Native", rev = "a3e758852b77c7e94c344a267c55d7cb7441c965" }
+acme-text = { git = "https://github.com/stevenke1981/AcmeUI-Native", rev = "a3e758852b77c7e94c344a267c55d7cb7441c965" }
+acme-textinput = { git = "https://github.com/stevenke1981/AcmeUI-Native", rev = "a3e758852b77c7e94c344a267c55d7cb7441c965" }
 arboard = { version = "3", default-features = false }
 chardetng = "1.0.0"
 encoding_rs = "0.8.35"
 ferrous-opencc = "0.4.0"
-fontdb = "0.22"
-i-slint-backend-winit = "=1.18.1"
+fontdb = "0.23"
 memmap2 = "0.9.12"
 pulldown-cmark = { version = "0.12", default-features = false }
 raw-window-handle = "0.6"
@@ -21,17 +30,20 @@ ropey = "1.6"
 similar = "2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
-slint = { version = "=1.18.1", features = ["raw-window-handle-06"] }
-spellbook = "0.4.2"
 syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing", "html", "yaml-load"] }
 unicode-width = "0.2"
-winit = { version = "0.30", default-features = false }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
+libloading = "0.8.9"
+windows-sys = { version = "0.61.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_LibraryLoader"] }
 winreg = "0.55"
 
-[build-dependencies]
-slint-build = "=1.18.1"
+[target.'cfg(not(windows))'.dependencies]
+spellbook = "0.4.2"
+
+[dev-dependencies]
+spellbook = "0.4.2"
 
 [profile.release]
 opt-level = 3

@@ -14,13 +14,13 @@ const THEME_KEYS: &[(&str, &str, &str)] = &[
     ("diff-add", "#d4f8d4", "#1f4a2a"), ("diff-del", "#ffd7d7", "#5a2a2a"), ("diff-chg", "#fff3c4", "#4a4520"),
 ];
 
-pub fn parse_color(s: &str) -> Option<slint::Color> {
+pub fn parse_color(s: &str) -> Option<crate::ui::Color> {
     let h = s.trim().strip_prefix('#')?;
     let v = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
     match h.len() {
-        6 => Some(slint::Color::from_rgb_u8(v(0)?, v(2)?, v(4)?)),
-        8 => Some(slint::Color::from_argb_u8(v(6)?, v(0)?, v(2)?, v(4)?)),
-        3 => { let c = |i: usize| u8::from_str_radix(&h[i..i + 1].repeat(2), 16).ok(); Some(slint::Color::from_rgb_u8(c(0)?, c(1)?, c(2)?)) }
+        6 => Some(crate::ui::Color::from_rgb_u8(v(0)?, v(2)?, v(4)?)),
+        8 => Some(crate::ui::Color::from_argb_u8(v(6)?, v(0)?, v(2)?, v(4)?)),
+        3 => { let c = |i: usize| u8::from_str_radix(&h[i..i + 1].repeat(2), 16).ok(); Some(crate::ui::Color::from_rgb_u8(c(0)?, c(1)?, c(2)?)) }
         _ => None,
     }
 }
@@ -61,18 +61,12 @@ impl App {
         let st = self.st.borrow();
         let dark = st.dark;
         let over = if dark { &st.cfg.theme_dark } else { &st.cfg.theme_light };
-        let t = ui.global::<Theme>();
+        let mut t = ui.theme();
         for (k, l, d) in THEME_KEYS {
             let c = over.get(*k).and_then(|s| parse_color(s)).or_else(|| parse_color(if dark { d } else { l })).unwrap();
-            match *k {
-                "editor-bg" => t.set_editor_bg(c), "fg" => t.set_fg(c), "gutter" => t.set_gutter(c), "gutter-fg" => t.set_gutter_fg(c),
-                "curline" => t.set_curline(c), "sel" => t.set_sel(c), "mark" => t.set_mark(c), "bracket" => t.set_bracket(c),
-                "chrome" => t.set_chrome(c), "menu" => t.set_menu(c), "tabbar" => t.set_tabbar(c), "tab" => t.set_tab(c),
-                "tab-active" => t.set_tab_active(c), "border" => t.set_border(c), "hover" => t.set_hover(c),
-                "diff-add" => t.set_diff_add(c), "diff-del" => t.set_diff_del(c), "diff-chg" => t.set_diff_chg(c),
-                _ => {}
-            }
+            t.set(k, c);
         }
+        ui.set_theme(t);
     }
 
     // ------------------------------------------------------------------ shortcuts
@@ -80,7 +74,7 @@ impl App {
         let Some(c) = combo(text, ctrl, shift, alt) else { return false };
         let act = { let st = self.st.borrow(); st.cfg.keys.iter().find(|(_, v)| norm_combo(v) == c).map(|(k, _)| k.clone()) };
         match act {
-            Some(a) => { let me = self.me.borrow().clone(); slint::Timer::single_shot(Duration::from_millis(0), move || { if let Some(me) = me.upgrade() { me.action(&a) } }); true }
+            Some(a) => { let me = self.me.borrow().clone(); Timer::single_shot(Duration::from_millis(0), move || { if let Some(me) = me.upgrade() { me.action(&a) } }); true }
             None => false,
         }
     }
@@ -146,9 +140,7 @@ impl App {
             }
             _ => {}
         }
-        let model = ui.get_side_items();
-        let same = model.row_count() == items.len() && items.iter().enumerate().all(|(i, t)| model.row_data(i).as_ref() == Some(t));
-        if !same { ui.set_side_items(ModelRc::new(VecModel::from(items))); }
+        ui.set_side_items(items);
     }
 
     pub(crate) fn side_switch(&self, m: i32) {
@@ -235,7 +227,7 @@ impl App {
         self.recompare();
         self.refresh_meta();
         let me = self.me.borrow().clone();
-        slint::Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = me.upgrade() { a.render_all(); a.diff_nav(true, true); } });
+        Timer::single_shot(Duration::from_millis(30), move || { if let Some(a) = me.upgrade() { a.render_all(); a.diff_nav(true, true); } });
     }
 
     pub(crate) fn recompare(&self) {
@@ -302,9 +294,9 @@ mod tests {
     use super::*;
     #[test]
     fn colors_and_combos() {
-        assert_eq!(parse_color("#ff0000"), Some(slint::Color::from_rgb_u8(255, 0, 0)));
-        assert_eq!(parse_color("#0f0"), Some(slint::Color::from_rgb_u8(0, 255, 0)));
-        assert_eq!(parse_color("#11223380"), Some(slint::Color::from_argb_u8(0x80, 0x11, 0x22, 0x33)));
+        assert_eq!(parse_color("#ff0000"), Some(crate::ui::Color::from_rgb_u8(255, 0, 0)));
+        assert_eq!(parse_color("#0f0"), Some(crate::ui::Color::from_rgb_u8(0, 255, 0)));
+        assert_eq!(parse_color("#11223380"), Some(crate::ui::Color::from_argb_u8(0x80, 0x11, 0x22, 0x33)));
         assert_eq!(parse_color("red"), None);
         assert_eq!(combo("k", true, true, false).as_deref(), Some("Ctrl+Shift+K"));
         assert_eq!(combo("k", false, false, false), None);

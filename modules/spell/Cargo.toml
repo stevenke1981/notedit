@@ -1,0 +1,12 @@
+[package]
+name = "notedit-spell"
+version = "0.7.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "notedit_spell"
+crate-type = ["cdylib"]
+
+[dependencies]
+spellbook = "0.4.2"

@@ -124,7 +124,11 @@ impl App {
             "xf:jsonmin" => self.try_transform(|s| fmt::json(s, None)),
             "xf:xmlfmt" => self.try_transform(|s| fmt::xml(s, Some(4))),
             "xf:xmlmin" => self.try_transform(|s| fmt::xml(s, None)),
-            "spell" => { { let mut st = self.st.borrow_mut(); st.cfg.spell = !st.cfg.spell; } self.persist(); self.refresh_meta(); self.render_all(); }
+            "spell" => {
+                if !self.st.borrow().cfg.spell { if let Err(e) = spell::available() { msg(&format!("無法啟用拼字檢查：{e}")); return true; } }
+                { let mut st = self.st.borrow_mut(); st.cfg.spell = !st.cfg.spell; }
+                self.persist(); self.refresh_meta(); self.render_all();
+            }
             "fif" => {
                 if ui.get_fif_dir().is_empty() {
                     let dir = { let st = self.st.borrow(); st.docs[self.cd()].path.as_ref().and_then(|p| p.parent()).map(|p| p.display().to_string()) }
@@ -233,7 +237,7 @@ impl App {
             st.file_hits.clear();
             st.fif_root = root.clone();
         }
-        ui.set_hits(ModelRc::new(VecModel::from(Vec::<SearchHit>::new())));
+        ui.set_hits(Vec::new());
         ui.set_hits_title(format!("在檔案中尋找「{}」：搜尋中… ({})", ui.get_find_text(), root.display()).into());
         ui.set_hits_visible(true);
         ui.set_fif_running(true);
@@ -275,7 +279,7 @@ impl App {
             let Some(j) = &st.rif else { return };
             let n = j.progress.load(Ordering::Relaxed);
             let status = if j.writing == 0 { format!("掃描中… 已檢查 {n} 個檔案") } else { format!("寫入中… {n} / {}", j.writing) };
-            if ui.get_find_status() != status.as_str() { ui.set_find_status(status.into()); }
+            ui.set_find_status(status);
             match j.rx.try_recv() { Ok(m) => Some(m), Err(mpsc::TryRecvError::Empty) => None, Err(_) => Some(RifMsg::Written(0, 0, vec!["背景工作意外結束".into()], vec![])) }
         };
         let Some(m) = msg_in else { return };
@@ -368,7 +372,7 @@ impl App {
 
     /// show a message box after the current frame was painted (menus/progress closed first)
     pub(crate) fn defer_msg(&self, m: String) {
-        slint::Timer::single_shot(Duration::from_millis(30), move || msg(&m));
+        Timer::single_shot(Duration::from_millis(30), move || msg(&m));
     }
 
     /// restore the files written by the last Replace in Files from their .bak copies
@@ -417,9 +421,7 @@ impl App {
                 start: h.start as i32, end: h.end as i32, text: h.snippet.as_str().into() }).collect();
             st.file_hits.extend(new.into_iter().map(|h| (h.path, h.line, h.start, h.end)));
             drop(st);
-            let model = ui.get_hits();
-            if let Some(vm) = model.as_any().downcast_ref::<VecModel<SearchHit>>() { for r in rows { vm.push(r); } }
-            else { ui.set_hits(ModelRc::new(VecModel::from(rows))); }
+            ui.extend_hits(rows);
         }
         if let Some((files, _)) = done {
             let n = self.st.borrow().file_hits.len();

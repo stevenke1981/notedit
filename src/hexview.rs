@@ -58,9 +58,9 @@ impl App {
         let h = d.hex.as_ref().unwrap();
         let len = h.buf.len();
         let wide = len > 0xFFFF_FFFF;
-        let fg = if dark { slint::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { slint::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
-        let dim = slint::Color::from_rgb_u8(0x9a, 0x9a, 0x9a);
-        let hi = if dark { slint::Color::from_rgb_u8(0x6c, 0xb6, 0xff) } else { slint::Color::from_rgb_u8(0x00, 0x40, 0xc0) };
+        let fg = if dark { crate::ui::Color::from_rgb_u8(0xdc, 0xdc, 0xdc) } else { crate::ui::Color::from_rgb_u8(0x1e, 0x1e, 0x1e) };
+        let dim = crate::ui::Color::from_rgb_u8(0x9a, 0x9a, 0x9a);
+        let hi = if dark { crate::ui::Color::from_rgb_u8(0x6c, 0xb6, 0xff) } else { crate::ui::Color::from_rgb_u8(0x00, 0x40, 0xc0) };
         let num_w = (if wide { 10.0 } else { 8.0 }) * cw + 4.0;
         let gutter_w = 16.0 + num_w + 16.0;
         let sel = h.sel();
@@ -94,8 +94,8 @@ impl App {
                 rects.push(EdRect { x: bx, w: bw, kind: 5 });
                 carets.push(EdCaret { x: cx, y: i as f32 * lh });
             }
-            rows.push(EdRow { num: crate::hex::offset_label(off, wide).into(), line: r as i32, fold: 0, cur: r == cur_row, mark: false, diff: 0,
-                              toks: ModelRc::new(VecModel::from(toks)), rects: ModelRc::new(VecModel::from(rects)) });
+            rows.push(EdRow { num: crate::hex::offset_label(off, wide), line: r as i32, fold: 0, cur: r == cur_row, mark: false, diff: 0,
+                              toks, rects });
         }
         if !active { carets.clear(); }
         let nrows = h.rows();
@@ -104,10 +104,10 @@ impl App {
         let title = if st.split { format!("{}{} [HEX]", if d.modified { "● " } else { "" }, d.title) } else { String::new() };
         let _ = w;
         let state = EdState {
-            rows: ModelRc::new(VecModel::from(rows)), carets: ModelRc::new(VecModel::from(carets)),
+            rows, carets,
             gutter_w, num_w, thumb_pos, thumb_size, hthumb_pos: 0.0, hthumb_size: 1.0, hbar: false,
-            ac_items: ModelRc::new(VecModel::from(Vec::<SharedString>::new())), ac_sel: 0, ac_visible: false,
-            title: title.into(), map_lines: ModelRc::new(VecModel::from(Vec::<MapLine>::new())), map_view_y: 0.0, map_view_h: 0.0,
+            ac_items: Vec::new(), ac_sel: 0, ac_visible: false,
+            title, map_lines: Vec::new(), map_view_y: 0.0, map_view_h: 0.0,
         };
         drop(st);
         if vi == 0 { ui.set_v0(state); } else { ui.set_v1(state); }
@@ -138,7 +138,7 @@ impl App {
         let lk = k.to_ascii_lowercase();
         if alt && !ctrl && (lk == 'h' || lk == 'c') {
             let name = if lk == 'h' { "textmode" } else { "columnmode" };
-            if let Some(me) = self.me.borrow().upgrade() { slint::Timer::single_shot(std::time::Duration::from_millis(0), move || me.action(name)); }
+            if let Some(me) = self.me.borrow().upgrade() { Timer::single_shot(std::time::Duration::from_millis(0), move || me.action(name)); }
             return true;
         }
         if ctrl {
