@@ -70,7 +70,7 @@
 
 | 功能 | issue #2 | 文件 | 程式碼實況 | 證據 |
 |---|---|---|---|---|
-| Installer/update | ☐ | Partial | **Partial** | Inno Setup：`installer/notedit.iss`、`scripts/package-windows.ps1:14-28`、CI：`.github/workflows/build.yml:97`；沒有更新機制 |
+| Installer/update | ☐ | Partial | **Partial** | IronSetup（Inno .iss 子集）：`installer/notedit.iss`、`scripts/package-windows.ps1:14-28`、CI：`.github/workflows/build.yml:97`；沒有更新機制 |
 | Checksums/signing | ☐ | （併在 Installer Partial） | **Missing** | workflow 沒有 hash 或簽章步驟；`Get-FileHash` 只印到 console：`scripts/package-windows.ps1:29` |
 | Accessibility + i18n | ☐ | Partial | **Partial**（a11y）／**Missing**（i18n） | 鍵盤操作和對話框 Tab 順序：`src/ui/shell.rs:173`；沒有 accessibility tree 或螢幕閱讀器支援；UI 字串寫死中文（`src/main.rs:286-337`） |
 | Security/path normalization | ☐ | Partial | **Partial**（未深入稽核） | `file_io::canon`：`src/file_io.rs:135-139`，recovery／開檔／session 都會用到（`src/app_actions.rs:88,248,264`）。沒有外部命令邊界或相依套件審查的紀錄 |

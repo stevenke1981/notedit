@@ -1,9 +1,6 @@
-#ifndef AppVersion
-  #error AppVersion must be supplied by scripts/package-windows.ps1
-#endif
-#ifndef RuntimeDir
-  #error RuntimeDir must be supplied by scripts/package-windows.ps1
-#endif
+; Built by IronSetup (https://github.com/stevenke1981/ironsetup), a strict Inno .iss subset.
+; AppVersion and RuntimeDir are supplied on the command line: --define AppVersion=x.y.z --define RuntimeDir=...
+; (see scripts/package-windows.ps1).
 
 [Setup]
 AppId={{C118C6F8-7D8F-405B-9515-A718D3C34BCC}
@@ -14,17 +11,14 @@ DefaultDirName={localappdata}\Programs\NotEdit
 DefaultGroupName=NotEdit
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\target\release\installer
 OutputBaseFilename=NotEdit-{#AppVersion}-windows-x64-setup
 SetupIconFile=..\ui\icon.ico
 UninstallDisplayIcon={app}\notedit.exe
-Compression=lzma2
-SolidCompression=yes
-WizardStyle=modern
+Compression=zip
 
 [Tasks]
-Name: "contextmenu"; Description: "在檔案總管右鍵選單加入 NotEdit（Windows 11：顯示其他選項）"; Flags: checkedonce
+Name: "contextmenu"; Description: "在檔案總管右鍵選單加入 NotEdit（Windows 11：顯示其他選項）"
 Name: "desktopicon"; Description: "建立桌面捷徑"; Flags: unchecked
 
 [Files]
@@ -42,16 +36,16 @@ Name: "{group}\NotEdit"; Filename: "{app}\notedit.exe"
 Name: "{autodesktop}\NotEdit"; Filename: "{app}\notedit.exe"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit"; ValueType: string; ValueName: ""; ValueData: "用 NotEdit 開啟"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\notedit.exe"",0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\notedit.exe"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\NotEdit"; ValueType: string; ValueName: ""; ValueData: "用 NotEdit 開啟資料夾"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\NotEdit"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\notedit.exe"",0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\NotEdit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\notedit.exe"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NotEdit"; ValueType: string; ValueName: ""; ValueData: "用 NotEdit 開啟資料夾"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NotEdit"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\notedit.exe"",0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NotEdit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\notedit.exe"" ""%V"""; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit"; ValueType: string; ValueName: ""; ValueData: "使用 NotEdit 開啟"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\notedit.exe"",0"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\*\shell\NotEdit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\notedit.exe"" ""%1"""; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\NotEdit"; ValueType: string; ValueName: ""; ValueData: "使用 NotEdit 開啟資料夾"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\NotEdit"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\notedit.exe"",0"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\NotEdit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\notedit.exe"" ""%1"""; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NotEdit"; ValueType: string; ValueName: ""; ValueData: "使用 NotEdit 開啟資料夾"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NotEdit"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\notedit.exe"",0"; Tasks: contextmenu; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NotEdit\command"; ValueType: string; ValueName: ""; ValueData: """{app}\notedit.exe"" ""%V"""; Tasks: contextmenu; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\notedit.exe"; Description: "啟動 NotEdit"; Flags: nowait postinstall skipifsilent

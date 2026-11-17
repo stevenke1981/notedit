@@ -41,17 +41,17 @@
 
 ### v0.7.0：檔案管理員右鍵選單
 
-- **Windows 檔案總管右鍵「用 NotEdit 開啟」**：設定 → 安裝檔案總管右鍵選單（或執行 `notedit.exe --install-shell`）。寫入目前使用者的登錄檔 `HKCU\Software\Classes`，**不需系統管理員權限**：
+- **Windows 檔案總管右鍵「使用 NotEdit 開啟」**：設定 → 安裝檔案總管右鍵選單（或執行 `notedit.exe --install-shell`）。寫入目前使用者的登錄檔 `HKCU\Software\Classes`，**不需系統管理員權限**：
   - `*\shell\NotEdit`：任何檔案，可多選
   - `Directory\shell\NotEdit`、`Directory\Background\shell\NotEdit`：資料夾（或資料夾空白處）以「資料夾工作區」開啟
   - 移除：設定 → 移除檔案總管右鍵選單，或 `notedit.exe --uninstall-shell`
   - 移動 notedit.exe 後請重新安裝一次
-- **Linux**：設定 → 安裝檔案管理員「用 NotEdit 開啟」（或 `notedit --install-shell`）會建立 `~/.local/share/applications/notedit.desktop`（MimeType 含 text/*、JSON、XML、YAML、資料夾），檔案管理員的「用其他應用程式開啟」即可選 NotEdit；`--uninstall-shell` 移除
+- **Linux**：設定 → 安裝檔案管理員「使用 NotEdit 開啟」（或 `notedit --install-shell`）會建立 `~/.local/share/applications/notedit.desktop`（MimeType 含 text/*、JSON、XML、YAML、資料夾），檔案管理員的「用其他應用程式開啟」即可選 NotEdit；`--uninstall-shell` 移除
 - **macOS**：尚不支援 Finder 右鍵選單（需要 .app 套件與 Finder 擴充功能），請用「打開檔案的應用程式」或把檔案拖進視窗
 - **單一執行個體**：NotEdit 已在執行時，再次開啟的檔案（包含檔案總管多選後一次開啟多個）會送到既有視窗開成新分頁並把視窗帶到前景；資料夾參數會開成工作區。使用 `--new-instance` 可強制開新視窗。轉送只走本機 127.0.0.1，並以隨機權杖驗證
 - 命令列可一次傳入多個檔案與資料夾：`notedit a.txt b.rs 專案資料夾`
 - Windows 安裝程式預設替目前使用者加入檔案與資料夾右鍵選單，可在安裝時取消勾選；解除安裝會移除安裝程式建立的選單。Windows 11 請在右鍵選單中選「顯示其他選項」。安裝不需要系統管理員權限。
-- 建立 Windows 安裝程式：安裝 Rust、MSVC C++ Redistributable 和 Inno Setup 6 或 7，執行 `powershell -File scripts/package-windows.ps1`；成品在 `target/release/installer/`。安裝程式隨附應用程式所需的 VC 執行階段 DLL；應定期重新打包以更新該 DLL。
+- 建立 Windows 安裝程式：安裝 Rust、MSVC C++ Redistributable 和 IronSetup（`cargo install --locked --git https://github.com/stevenke1981/ironsetup ironsetup`，或以 `-IronSetup <路徑>` 指定 `ironsetup.exe`），執行 `powershell -File scripts/package-windows.ps1`；成品在 `target/release/installer/`。安裝程式隨附應用程式所需的 VC 執行階段 DLL；應定期重新打包以更新該 DLL。
 
 ### v0.6.0
 

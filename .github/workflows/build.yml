@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # Pinned IronSetup revision used to build the Windows installer (filled in by the integrator).
+  IRONSETUP_REV: 871277cb36d70db313374379f4b53542c65873b8
+
 jobs:
   build:
     strategy:
@@ -71,6 +75,11 @@ jobs:
           Get-Content "$env:RUNNER_TEMP\smoke.txt"
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern NOTEDIT_SMOKE_OK -Quiet)) { throw "smoke test failed" }
           if (-not (Select-String -Path "$env:RUNNER_TEMP\smoke.txt" -Pattern SPELL_MODULE_OK -Quiet)) { throw "spell module test failed" }
+      - name: Install IronSetup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo install --locked --git https://github.com/stevenke1981/ironsetup --rev $env:IRONSETUP_REV ironsetup
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
