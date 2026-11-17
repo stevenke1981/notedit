@@ -158,15 +158,32 @@ const CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 fn guard_path(lock: &Path) -> PathBuf { lock.with_file_name("instance.starting") }
 
-fn try_guard(g: &Path) -> bool {
-    if let Some(d) = g.parent() { let _ = std::fs::create_dir_all(d); }
-    let make = || std::fs::OpenOptions::new().write(true).create_new(true).open(g).is_ok();
-    if make() { return true; }
+enum Guard { Got, Busy, Unavailable }
+
+fn try_guard(g: &Path) -> Guard {
+    if let Some(d) = g.parent() { if std::fs::create_dir_all(d).is_err() { return Guard::Unavailable; } }
+    let make = || std::fs::OpenOptions::new().write(true).create_new(true).open(g);
+    match make() {
+        Ok(_) => return Guard::Got,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Guard::Unavailable, // unwritable dir etc.: not contention, don't wait
+    }
     // a crashed starter must not block everyone forever
     let stale = std::fs::metadata(g).and_then(|m| m.modified()).ok()
         .and_then(|t| t.elapsed().ok()).map(|e| e > GUARD_STALE).unwrap_or(false);
-    if stale { let _ = std::fs::remove_file(g); return make(); }
-    false
+    if stale {
+        // rename is atomic: of several launchers seeing the same stale file only one wins,
+        // so nobody can delete a fresh guard another launcher just created
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let tmp = g.with_extension(format!("stale{}-{nanos}", std::process::id()));
+        if std::fs::rename(g, &tmp).is_ok() { let _ = std::fs::remove_file(&tmp); }
+        return match make() {
+            Ok(_) => Guard::Got,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Guard::Busy,
+            Err(_) => Guard::Unavailable,
+        };
+    }
+    Guard::Busy
 }
 
 /// Either hand `paths` to the running instance or win the right to become it.
@@ -180,12 +197,18 @@ fn claim_at(lock: &Path, paths: &[PathBuf], timeout: std::time::Duration) -> Cla
     let start = std::time::Instant::now();
     loop {
         if forward_at(lock, paths) { return Claim::Forwarded; }
-        if try_guard(&g) {
-            // the previous primary may have published between our forward and the guard
-            if forward_at(lock, paths) { drop(StartGuard(Some(g))); return Claim::Forwarded; }
-            return Claim::Primary(StartGuard(Some(g)));
+        match try_guard(&g) {
+            Guard::Got => {
+                // the previous primary may have published between our forward and the guard
+                if forward_at(lock, paths) { drop(StartGuard(Some(g))); return Claim::Forwarded; }
+                return Claim::Primary(StartGuard(Some(g)));
+            }
+            Guard::Unavailable => return Claim::Primary(StartGuard(None)),
+            Guard::Busy => {}
         }
-        if start.elapsed() > timeout { return Claim::Primary(StartGuard(None)); }
+        if start.elapsed() > timeout {
+            return if forward_at(lock, paths) { Claim::Forwarded } else { Claim::Primary(StartGuard(None)) };
+        }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
@@ -288,16 +311,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
+    fn unwritable_dir_does_not_stall() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let f = std::env::temp_dir().join(format!("notedit-notdir-{}-{nanos}", std::process::id()));
+        std::fs::write(&f, "x").unwrap(); // a file where the config dir should be
+        let t = std::time::Instant::now();
+        let c = claim_at(&f.join("instance.lock"), &[], std::time::Duration::from_secs(10));
+        assert!(matches!(c, Claim::Primary(_)));
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+        let _ = std::fs::remove_file(&f);
+    }
+    #[test]
     fn stale_guard_is_broken() {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("notedit-stale-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let g = dir.join("instance.starting");
         std::fs::write(&g, "").unwrap();
-        assert!(!try_guard(&g)); // fresh guard held by someone else
+        assert!(matches!(try_guard(&g), Guard::Busy)); // fresh guard held by someone else
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
         std::fs::File::options().write(true).open(&g).unwrap().set_modified(old).unwrap();
-        assert!(try_guard(&g));
+        assert!(matches!(try_guard(&g), Guard::Got));
+        assert!(matches!(try_guard(&g), Guard::Busy)); // the fresh replacement is not stolen
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "stale temp must be cleaned");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

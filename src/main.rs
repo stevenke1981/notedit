@@ -614,10 +614,12 @@ fn main() {
 
     let ui = AppWindow::new();
     let mut cfg = settings::Settings::load();
+    // any modal dialog must wait until the start guard is released (below)
+    let mut spell_warning: Option<String> = None;
     if cfg.spell {
         if let Err(e) = spell::available() {
             cfg.spell = false;
-            msg(&format!("無法啟用拼字檢查：{e}\n請確認拼字模組與程式位於同一資料夾。"));
+            spell_warning = Some(format!("無法啟用拼字檢查：{e}\n請確認拼字模組與程式位於同一資料夾。"));
         }
     }
     let font_choices = detect_fonts();
@@ -672,6 +674,7 @@ fn main() {
         });
     }
     drop(start_guard.take()); // listener is published: queued launches now forward to us
+    if let Some(w) = spell_warning { msg(&w); }
     if smoke.is_none() { app.restore_recovery(); } // a modal recovery prompt would block the smoke test
     app.apply_theme();
     app.refresh_all();

@@ -1,5 +1,5 @@
 ; Built by IronSetup (https://github.com/stevenke1981/ironsetup), a strict Inno .iss subset.
-; AppVersion and RuntimeDir are supplied on the command line: /DAppVersion=x.y.z /DRuntimeDir=...
+; AppVersion and RuntimeDir are supplied on the command line: --define AppVersion=x.y.z --define RuntimeDir=...
 ; (see scripts/package-windows.ps1).
 
 [Setup]
