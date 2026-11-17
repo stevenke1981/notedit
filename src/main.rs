@@ -325,7 +325,7 @@ fn build_menus(st: &State) -> Vec<Menu> {
             mi("OpenRouter API 金鑰...", "", "ai-settings"),
             chk("覆寫模式", "Insert", "toggleovr", st.overwrite), chk("自動完成 (Ctrl+Space)", "", "autocomplete", st.autocomplete), chk("打字機模式 (游標行置中)", "", "typewriter", st.cfg.typewriter), chk("啟動時還原上次工作階段", "", "restoresession", st.cfg.restore_session), sep(),
             mi("編輯佈景主題色彩 / 快捷鍵 (settings.json)...", "", "editconfig"), mi("開啟設定檔所在資料夾", "", "openconfig"), sep(),
-            mi(if cfg!(windows) { "安裝檔案總管右鍵選單「用 NotEdit 開啟」" } else { "安裝檔案管理員「用 NotEdit 開啟」(.desktop)" }, "", "installshell"),
+            mi(if cfg!(windows) { "安裝檔案總管右鍵選單「使用 NotEdit 開啟」" } else { "安裝檔案管理員「使用 NotEdit 開啟」(.desktop)" }, "", "installshell"),
             mi(if cfg!(windows) { "移除檔案總管右鍵選單" } else { "移除檔案管理員整合 (.desktop)" }, "", "uninstallshell"), sep()]
             .into_iter().chain(st.font_choices.iter().map(|f| chk(&format!("字型：{}{}", f, if BUNDLED_FONTS.contains(&f.as_str()) { "（內建）" } else { "" }), "", &format!("font:{}", f), *f == st.font_family))).collect()),
         menu("工具", vec![mi("AI 文件助手...", "", "ai"), sep(), mi("字數統計...", "", "wordcount"), mi("插入日期時間", "", "datetime"), sep(),
@@ -605,10 +605,11 @@ fn main() {
     let new_inst = args.iter().position(|a| a == "--new-instance" || a == "-multiInst").map(|i| args.remove(i)).is_some();
     let smoking = args.iter().any(|a| a == "--smoke-test");
     let single = !new_inst && !smoking;
+    let mut start_guard: Option<shell::StartGuard> = None;
     if single {
         let cwd = std::env::current_dir().unwrap_or_default();
         let abs: Vec<PathBuf> = args.iter().map(|a| { let p = PathBuf::from(a); if p.is_absolute() { p } else { cwd.join(p) } }).collect();
-        if shell::forward(&abs) { return; }
+        match shell::claim(&abs) { shell::Claim::Forwarded => return, shell::Claim::Primary(g) => start_guard = Some(g) }
     }
 
     let ui = AppWindow::new();
@@ -670,6 +671,7 @@ fn main() {
             }));
         });
     }
+    drop(start_guard.take()); // listener is published: queued launches now forward to us
     if smoke.is_none() { app.restore_recovery(); } // a modal recovery prompt would block the smoke test
     app.apply_theme();
     app.refresh_all();

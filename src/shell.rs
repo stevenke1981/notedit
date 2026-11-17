@@ -1,4 +1,4 @@
-//! OS file-manager integration ("用 NotEdit 開啟") and single-instance forwarding.
+//! OS file-manager integration ("使用 NotEdit 開啟") and single-instance forwarding.
 //!
 //! * Windows: per-user registry keys under `HKCU\Software\Classes` (no admin).
 //! * Linux: a `.desktop` file in `~/.local/share/applications` (MimeType text/*).
@@ -9,9 +9,9 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 
 #[cfg_attr(not(windows), allow(dead_code))]
-pub const MENU_TEXT: &str = "用 NotEdit 開啟";
+pub const MENU_TEXT: &str = "使用 NotEdit 開啟";
 #[cfg_attr(not(windows), allow(dead_code))]
-pub const FOLDER_TEXT: &str = "用 NotEdit 開啟資料夾";
+pub const FOLDER_TEXT: &str = "使用 NotEdit 開啟資料夾";
 
 /// One registry value to write: (key below HKCU, value name ("" = default), data).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -50,7 +50,7 @@ pub fn install_shell(exe: &Path) -> Result<String, String> {
         let (k, _) = hkcu.create_subkey(&e.key).map_err(|x| format!("{}: {x}", e.key))?;
         k.set_value(&e.name, &e.data).map_err(|x| format!("{}: {x}", e.key))?;
     }
-    Ok("已安裝檔案總管右鍵選單「用 NotEdit 開啟」（目前使用者）。".into())
+    Ok("已安裝檔案總管右鍵選單「使用 NotEdit 開啟」（目前使用者）。".into())
 }
 
 #[cfg(windows)]
@@ -130,8 +130,10 @@ pub fn decode(msg: &str, token: &str) -> Option<Vec<PathBuf>> {
 }
 
 /// Try handing `paths` to an already running NotEdit. Returns true when it accepted.
-pub fn forward(paths: &[PathBuf]) -> bool {
-    let Ok(s) = std::fs::read_to_string(lock_file()) else { return false };
+pub fn forward(paths: &[PathBuf]) -> bool { forward_at(&lock_file(), paths) }
+
+fn forward_at(lock: &Path, paths: &[PathBuf]) -> bool {
+    let Ok(s) = std::fs::read_to_string(lock) else { return false };
     let mut it = s.split_whitespace();
     let (Some(port), Some(token)) = (it.next().and_then(|p| p.parse::<u16>().ok()), it.next()) else { return false };
     let Ok(mut c) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), std::time::Duration::from_millis(500)) else { return false };
@@ -142,16 +144,66 @@ pub fn forward(paths: &[PathBuf]) -> bool {
     c.read_to_string(&mut ack).is_ok() && ack.starts_with("OK")
 }
 
+/// Startup mutual exclusion. Explorer (MultiSelectModel=Player) launches one
+/// process per selected file at the same moment; without this each could find no
+/// listener and become primary. The guard is an exclusively created marker file
+/// held from "forward failed" until the listener is published.
+pub struct StartGuard(Option<PathBuf>);
+impl Drop for StartGuard { fn drop(&mut self) { if let Some(p) = self.0.take() { let _ = std::fs::remove_file(p); } } }
+
+pub enum Claim { Forwarded, Primary(StartGuard) }
+
+const GUARD_STALE: std::time::Duration = std::time::Duration::from_secs(15);
+const CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn guard_path(lock: &Path) -> PathBuf { lock.with_file_name("instance.starting") }
+
+fn try_guard(g: &Path) -> bool {
+    if let Some(d) = g.parent() { let _ = std::fs::create_dir_all(d); }
+    let make = || std::fs::OpenOptions::new().write(true).create_new(true).open(g).is_ok();
+    if make() { return true; }
+    // a crashed starter must not block everyone forever
+    let stale = std::fs::metadata(g).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.elapsed().ok()).map(|e| e > GUARD_STALE).unwrap_or(false);
+    if stale { let _ = std::fs::remove_file(g); return make(); }
+    false
+}
+
+/// Either hand `paths` to the running instance or win the right to become it.
+/// Concurrent callers are serialized: exactly one gets `Primary` until it
+/// publishes its listener (`listen`) and drops the guard; the rest keep
+/// retrying `forward` and end up forwarding to it.
+pub fn claim(paths: &[PathBuf]) -> Claim { claim_at(&lock_file(), paths, CLAIM_TIMEOUT) }
+
+fn claim_at(lock: &Path, paths: &[PathBuf], timeout: std::time::Duration) -> Claim {
+    let g = guard_path(lock);
+    let start = std::time::Instant::now();
+    loop {
+        if forward_at(lock, paths) { return Claim::Forwarded; }
+        if try_guard(&g) {
+            // the previous primary may have published between our forward and the guard
+            if forward_at(lock, paths) { drop(StartGuard(Some(g))); return Claim::Forwarded; }
+            return Claim::Primary(StartGuard(Some(g)));
+        }
+        if start.elapsed() > timeout { return Claim::Primary(StartGuard(None)); }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 /// Become the primary instance: listen on loopback and call `on_open` (from a
 /// background thread) for every batch of forwarded paths.
-pub fn listen(on_open: impl Fn(Vec<PathBuf>) + Send + 'static) -> Option<()> {
+pub fn listen(on_open: impl Fn(Vec<PathBuf>) + Send + 'static) -> Option<()> { listen_at(&lock_file(), on_open) }
+
+fn listen_at(lf: &Path, on_open: impl Fn(Vec<PathBuf>) + Send + 'static) -> Option<()> {
     let l = TcpListener::bind(("127.0.0.1", 0)).ok()?;
     let port = l.local_addr().ok()?.port();
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) ^ ((std::process::id() as u128) << 64);
     let token = format!("{:032x}", seed.wrapping_mul(0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835));
-    let lf = lock_file();
     if let Some(d) = lf.parent() { let _ = std::fs::create_dir_all(d); }
-    std::fs::write(&lf, format!("{port} {token}\n")).ok()?;
+    // write-then-rename so a concurrent forward never reads a half-written file
+    let tmp = lf.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, format!("{port} {token}\n")).ok()?;
+    if std::fs::rename(&tmp, lf).is_err() { std::fs::write(lf, format!("{port} {token}\n")).ok()?; let _ = std::fs::remove_file(&tmp); }
     std::thread::spawn(move || {
         for c in l.incoming().flatten() {
             let mut msg = String::new();
@@ -194,5 +246,58 @@ mod tests {
         assert_eq!(decode(&encode("t1", &p), "t1"), Some(p.clone()));
         assert_eq!(decode(&encode("t1", &p), "t2"), None);
         assert_eq!(decode("garbage", "t1"), None);
+    }
+    #[test]
+    fn labels() {
+        assert_eq!(MENU_TEXT, "使用 NotEdit 開啟");
+        assert_eq!(FOLDER_TEXT, "使用 NotEdit 開啟資料夾");
+    }
+    #[test]
+    fn concurrent_launches_elect_one_primary() {
+        use std::sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex};
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("notedit-claim-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join("instance.lock");
+        let primaries = Arc::new(AtomicUsize::new(0));
+        let got: Arc<Mutex<Vec<PathBuf>>> = Default::default();
+        const N: usize = 12;
+        let hs: Vec<_> = (0..N).map(|i| {
+            let (lock, primaries, got) = (lock.clone(), primaries.clone(), got.clone());
+            std::thread::spawn(move || {
+                let p = vec![PathBuf::from(format!("/f{i}.txt"))];
+                match claim_at(&lock, &p, std::time::Duration::from_secs(10)) {
+                    Claim::Forwarded => {}
+                    Claim::Primary(g) => {
+                        primaries.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(100)); // slow startup
+                        let got2 = got.clone();
+                        listen_at(&lock, move |v| got2.lock().unwrap().extend(v)).unwrap();
+                        got.lock().unwrap().extend(p);
+                        drop(g);
+                    }
+                }
+            })
+        }).collect();
+        for h in hs { h.join().unwrap(); }
+        assert_eq!(primaries.load(Ordering::SeqCst), 1);
+        for _ in 0..100 { if got.lock().unwrap().len() == N { break; } std::thread::sleep(std::time::Duration::from_millis(30)); }
+        let mut v = got.lock().unwrap().clone(); v.sort(); v.dedup();
+        assert_eq!(v.len(), N, "every launch's file must reach the single primary");
+        assert!(!guard_path(&lock).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn stale_guard_is_broken() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("notedit-stale-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = dir.join("instance.starting");
+        std::fs::write(&g, "").unwrap();
+        assert!(!try_guard(&g)); // fresh guard held by someone else
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&g).unwrap().set_modified(old).unwrap();
+        assert!(try_guard(&g));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
