@@ -129,9 +129,7 @@ pub fn decode(msg: &str, token: &str) -> Option<Vec<PathBuf>> {
     Some(lines.filter(|l| !l.is_empty()).map(PathBuf::from).collect())
 }
 
-/// Try handing `paths` to an already running NotEdit. Returns true when it accepted.
-pub fn forward(paths: &[PathBuf]) -> bool { forward_at(&lock_file(), paths) }
-
+/// Try handing `paths` to the NotEdit listening at `lock`. Returns true when it accepted.
 fn forward_at(lock: &Path, paths: &[PathBuf]) -> bool {
     let Ok(s) = std::fs::read_to_string(lock) else { return false };
     let mut it = s.split_whitespace();

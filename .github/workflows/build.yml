@@ -12,7 +12,7 @@ permissions:
 
 env:
   # Pinned IronSetup revision used to build the Windows installer (filled in by the integrator).
-  IRONSETUP_REV: 871277cb36d70db313374379f4b53542c65873b8
+  IRONSETUP_REV: 0b4f74c9ca34e401c4e7ba8d037202c0b9a60705
 
 jobs:
   build:
