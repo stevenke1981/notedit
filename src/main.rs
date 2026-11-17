@@ -694,6 +694,8 @@ fn main() {
     drop((recovery_timer, file_watch_timer, _smoke_timer));
     if single { shell::release(); }
     APP.with(|a| a.borrow_mut().take());
+    // pending single-shot callbacks hold Rc<App>: release them before thread-local teardown
+    ui::timer::clear_all();
     if let Err(e) = r {
         eprintln!("NotEdit: {e}");
         msg(&format!("無法建立視窗：{e}"));

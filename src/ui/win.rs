@@ -10,15 +10,27 @@ mod imp {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumThreadWindows, GetWindowLongPtrW, IsWindowVisible, LoadIconW, SendMessageW, GWL_STYLE, ICON_BIG, ICON_SMALL, WM_SETICON, WS_CAPTION,
+        EnumThreadWindows, GetClassNameW, GetSystemMetrics, GetWindowLongPtrW, IsWindowVisible, LoadIconW, LoadImageW, SendMessageW, GWL_STYLE, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_SHARED, SM_CXSMICON,
+        SM_CYSMICON, WM_SETICON, WS_CAPTION,
     };
 
     thread_local! { static MAIN: Cell<isize> = const { Cell::new(0) }; }
 
+    /// winit's default window class (winit 0.30 `PlatformSpecificWindowAttributes`).
+    /// NOTE: depends on the pinned winit / acme-platform rev; re-check when bumping it.
+    const WINIT_CLASS: &str = "Window Class";
+
+    /// MAKEINTRESOURCE id of the exe icon (embedded by winresource)
+    const ICON_RES_ID: usize = 1;
+
     unsafe extern "system" fn enum_cb(hwnd: HWND, lp: LPARAM) -> i32 {
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-            if IsWindowVisible(hwnd) != 0 && style & WS_CAPTION == WS_CAPTION {
+            let mut buf = [0u16; 64];
+            let n = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            let class = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+            // only our winit window: never an rfd / system dialog of the same thread
+            if IsWindowVisible(hwnd) != 0 && style & WS_CAPTION == WS_CAPTION && class == WINIT_CLASS {
                 *(lp as *mut isize) = hwnd as isize;
                 return 0;
             }
@@ -26,7 +38,7 @@ mod imp {
         1
     }
 
-    /// Find (once) the visible captioned top-level window of the UI thread.
+    /// Find (once found, cached) the visible captioned winit window of the UI thread.
     pub fn main_hwnd() -> Option<isize> {
         let cur = MAIN.with(|m| m.get());
         if cur != 0 { return Some(cur); }
@@ -39,10 +51,12 @@ mod imp {
     pub fn set_icon(hwnd: isize) -> bool {
         unsafe {
             let inst = GetModuleHandleW(std::ptr::null());
-            let icon = LoadIconW(inst, 1 as *const u16);
+            let icon = LoadIconW(inst, ICON_RES_ID as *const u16);
             if icon.is_null() { return false; }
             SendMessageW(hwnd as HWND, WM_SETICON, ICON_BIG as usize, icon as isize);
-            SendMessageW(hwnd as HWND, WM_SETICON, ICON_SMALL as usize, icon as isize);
+            let small = LoadImageW(inst, ICON_RES_ID as *const u16, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+            let small = if small.is_null() { icon } else { small };
+            SendMessageW(hwnd as HWND, WM_SETICON, ICON_SMALL as usize, small as isize);
             true
         }
     }

@@ -1,6 +1,6 @@
 # NotEdit 示範
 
-這是一個以 **Rust + Slint** 製作的文字編輯器。
+這是一個以 **Rust + AcmeUI-Native** 製作的文字編輯器。
 
 ## 功能
 - 多分頁編輯

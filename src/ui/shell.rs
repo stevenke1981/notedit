@@ -107,6 +107,7 @@ pub struct Shell {
     quitting: bool,
     title_sent: String,
     first_frame: bool,
+    icon_set: bool,
     cursor: CursorIcon,
     clipboard: Option<acme_platform::Clipboard>,
     ui_family: String,
@@ -141,7 +142,7 @@ pub fn run(app: Rc<App>) -> Result<(), String> {
         app, ui, fonts, atlas: GlyphAtlas::default(), cache: TextCache::default(), hits: Hits::default(), layout: Layout::default(),
         menu_titles: Vec::new(), focus: Focus::Editor(0), mods: (false, false, false), pointer: (0.0, 0.0), capture: None, hover: None,
         pending: Vec::new(), blink: Timer::default(), blink_on: Rc::new(Cell::new(true)), preedit: String::new(), preedit_cursor: None,
-        scale: 1.0, quitting: false, title_sent: String::new(), first_frame: true, cursor: CursorIcon::Default, clipboard: None, ui_family,
+        scale: 1.0, quitting: false, title_sent: String::new(), first_frame: true, icon_set: false, cursor: CursorIcon::Default, clipboard: None, ui_family,
         tab_drag: None, side_click: (None, usize::MAX), scroll: Scrolls::default(), combo_open: None, dlg_seen: [false; 7], ime_rect: None,
         metrics_key: (String::new(), 0, 0, 0), metrics: (8.0, 18.0, 0.0, 16.0, 17.0), fontdb: db, styles: Default::default(),
         script: std::env::var_os("NOTEDIT_SCRIPT").and_then(|p| std::fs::read_to_string(p).ok()).map(|s| super::script::parse(&s).into()).unwrap_or_default(),
@@ -837,8 +838,17 @@ impl Application for Shell {
         ui.set_win_w(w); ui.set_win_h(h); ui.set_scale(self.scale);
         if self.first_frame {
             self.first_frame = false;
-            if let Some(hwnd) = win::main_hwnd() { win::set_icon(hwnd); }
             dispatch::drain();
+        }
+        // G6: retry on later frames until the window exists and the icon is set
+        if !self.icon_set {
+            if !cfg!(windows) {
+                self.icon_set = true;
+            } else if let Some(h) = win::main_hwnd() {
+                // one attempt only: never retry forever if it fails
+                let _ = win::set_icon(h);
+                self.icon_set = true;
+            }
         }
         // metrics + view sizes (former `out` properties); a change re-renders synchronously
         let (cell_w, line_h, text_dy, cjk_w, _) = self.update_metrics();

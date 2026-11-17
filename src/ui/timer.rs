@@ -26,28 +26,34 @@ pub struct Timer { id: Cell<Option<u64>> }
 impl Timer {
     /// (Re)start the timer; a running timer is restarted with the new callback.
     pub fn start(&self, mode: TimerMode, interval: Duration, cb: impl FnMut() + 'static) {
-        let id = REG.with(|r| {
+        let (id, replaced) = REG.with(|r| {
             let mut r = r.borrow_mut();
             let id = match self.id.get() { Some(id) => id, None => { r.next += 1; r.next } };
             r.generation += 1;
             let generation = r.generation;
-            r.slots.insert(id, Slot {
+            let old = r.slots.insert(id, Slot {
                 deadline: Instant::now() + interval,
                 period: (mode == TimerMode::Repeated).then_some(interval.max(Duration::from_millis(1))),
                 generation,
                 cb: Some(Box::new(cb)),
             });
-            id
+            (id, old)
         });
         self.id.set(Some(id));
+        // the replaced callback may own timers: drop it outside the registry borrow
+        drop(replaced);
     }
 
     pub fn stop(&self) {
-        if let Some(id) = self.id.take() { REG.with(|r| r.borrow_mut().slots.remove(&id)); }
+        // try_with: timers may be dropped during thread-local destruction at exit
+        if let Some(id) = self.id.take() {
+            let removed = REG.try_with(|r| r.borrow_mut().slots.remove(&id)).ok().flatten();
+            drop(removed);
+        }
     }
 
     pub fn running(&self) -> bool {
-        self.id.get().is_some_and(|id| REG.with(|r| r.borrow().slots.contains_key(&id)))
+        self.id.get().is_some_and(|id| REG.try_with(|r| r.borrow().slots.contains_key(&id)).unwrap_or(false))
     }
 
     /// Run `cb` once after `d` (not cancellable, like the old `Timer::single_shot`).
@@ -61,6 +67,13 @@ impl Timer {
 }
 
 impl Drop for Timer { fn drop(&mut self) { self.stop(); } }
+
+/// Drop every pending timer (end of `main`, before thread-local teardown);
+/// callbacks are dropped outside the registry borrow.
+pub fn clear_all() {
+    let slots = REG.try_with(|r| std::mem::take(&mut r.borrow_mut().slots)).unwrap_or_default();
+    drop(slots);
+}
 
 /// Time until the earliest deadline, rounded down into a few buckets so the
 /// platform's poll interval does not change on every call; None when idle.
@@ -86,21 +99,30 @@ pub fn fire_due() -> bool {
             let s = r.slots.get_mut(&id).filter(|s| s.generation == generation)?;
             let cb = s.cb.take()?;
             let single = s.period.is_none();
-            if single { r.slots.remove(&id); }
-            Some(cb)
+            let removed = if single { r.slots.remove(&id) } else { None };
+            Some((cb, removed))
         });
-        let Some(mut cb) = taken else { continue };
+        let Some((mut cb, removed)) = taken else { continue };
+        drop(removed);
         cb();
         ran = true;
-        REG.with(|r| {
+        // re-arm a repeating timer; a callback that is not kept is dropped outside the borrow
+        let unused = REG.with(|r| {
             let mut r = r.borrow_mut();
-            if let Some(s) = r.slots.get_mut(&id).filter(|s| s.generation == generation) {
-                if let Some(p) = s.period {
-                    s.deadline = (s.deadline + p).max(Instant::now());
-                    s.cb = Some(cb);
+            match r.slots.get_mut(&id).filter(|s| s.generation == generation) {
+                Some(s) => {
+                    if let Some(p) = s.period {
+                        s.deadline = (s.deadline + p).max(Instant::now());
+                        s.cb = Some(cb);
+                        None
+                    } else {
+                        Some(cb)
+                    }
                 }
+                None => Some(cb),
             }
         });
+        drop(unused);
     }
     ran
 }
